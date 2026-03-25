@@ -2,7 +2,6 @@ import { React, useState, useEffect } from "react";
 import fetcher from "../../http/RequestConfig";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
-  faCommentDots,
   faPen,
   faPenToSquare,
   faTrashCan,
@@ -19,8 +18,8 @@ function ChatHistory(props) {
   useEffect(() => {
     retrieveAllChats();
   }, [props.selectedChatId, props.forceUpdate]);
-  
-  const handleDeleteChat = async (chat_id) => {
+
+  const handleDeleteChat = (chat_id) => {
     setChatToDelete(chat_id);
     setShowConfirmPopupChat(true);
   };
@@ -35,7 +34,7 @@ function ChatHistory(props) {
     setShowConfirmPopupChat(false);
   };
 
-  const handleRenameChat = async (chat_id) => {
+  const handleRenameChat = (chat_id) => {
     setChatIdToRename(chat_id);
     setShowRenameModal(true);
   };
@@ -59,9 +58,7 @@ function ChatHistory(props) {
         },
         body: JSON.stringify({ chat_type: props.chat_type }),
       });
-
       const response_data = await response.json();
-
       setChats(response_data.chat_info);
     } catch (error) {
       console.error("Error fetching chats:", error);
@@ -71,50 +68,41 @@ function ChatHistory(props) {
   const deleteChat = async (chat_id) => {
     try {
       const response = await fetcher("delete-chat", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ chat_id: chat_id }),
-      
-    });
-
-    if (response.ok) {
-      // If successful, proceed with the force update
-      props.handleForceUpdate();
-
-      try {
-        const response = await fetcher("find-most-recent-chat", {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({}), 
+        body: JSON.stringify({ chat_id: chat_id }),
       });
 
-        const response_data = await response.json();
-
-        props.handleChatSelect(response_data.chat_info.id);
-        props.setCurrChatName(response_data.chat_info.chat_name)
-
-
-      } catch (e) {
-        console.error("Error during chat deletion", e);
+      if (response.ok) {
+        props.handleForceUpdate();
+        try {
+          const recentRes = await fetcher("find-most-recent-chat", {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({}),
+          });
+          const data = await recentRes.json();
+          props.handleChatSelect(data.chat_info.id);
+          props.setCurrChatName(data.chat_info.chat_name);
+        } catch (e) {
+          console.error("Error finding most recent chat after deletion:", e);
+        }
+      } else {
+        console.error("Server responded with non-OK status on delete");
       }
-      
-    } else {
-      // Handle server error
-      console.error("Server responded with non-OK status");
+    } catch (e) {
+      console.error("Error during chat deletion:", e);
     }
-  } catch (e) {
-    console.error("Error during chat deletion", e);
-  }
-};
+  };
 
   const renameChat = async (chat_id, new_name) => {
-    const response = await fetcher("update-chat-name", {
+    await fetcher("update-chat-name", {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -137,7 +125,7 @@ function ChatHistory(props) {
       }}
       className="bg-gray-800 text-white z-50"
     >
-      <p>Are you sure you want to delete Chat {chatToDelete}?</p>
+      <p>Are you sure you want to delete this chat?</p>
       <div className="flex flex-row justify-between mt-2">
         <button
           onClick={confirmDeleteChat}
@@ -167,7 +155,7 @@ function ChatHistory(props) {
           backgroundColor: "rgba(0,0,0,0.4)",
           zIndex: 999,
         }}
-      />{" "}
+      />
       <div
         style={{
           position: "fixed",
@@ -180,32 +168,28 @@ function ChatHistory(props) {
           boxShadow: "0px 0px 15px rgba(0,0,0,0.5)",
           textAlign: "center",
         }}
-        className="bg-gray-800 text-white "
+        className="bg-gray-800 text-white"
       >
-        <div style={{ position: "relative" }}>
-          <div>
-            <div className="my-2">Enter new chat name</div>
-            <input
-              type="text"
-              className="rounded-xl bg-[#3A3B41] border-none focus:ring-0 focus:border-white text-white placeholder:text-gray-300"
-              onChange={(e) => setNewChatName(e.target.value)}
-              value={newChatName}
-            />
-          </div>
-          <div className="w-full flex justify-between mt-4">
-            <button
-              onClick={cancelRenameChat}
-              className="w-1/2 mx-2 py-2 bg-gray-700 rounded-lg hover:bg-gray-900"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={confirmRenameChat}
-              className="w-1/2 mx-2 py-2 bg-gray-700 rounded-lg hover:bg-gray-900"
-            >
-              Save
-            </button>
-          </div>
+        <div className="my-2">Enter new chat name</div>
+        <input
+          type="text"
+          className="rounded-xl bg-[#3A3B41] border-none focus:ring-0 focus:border-white text-white placeholder:text-gray-300"
+          onChange={(e) => setNewChatName(e.target.value)}
+          value={newChatName}
+        />
+        <div className="w-full flex justify-between mt-4">
+          <button
+            onClick={cancelRenameChat}
+            className="w-1/2 mx-2 py-2 bg-gray-700 rounded-lg hover:bg-gray-900"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmRenameChat}
+            className="w-1/2 mx-2 py-2 bg-gray-700 rounded-lg hover:bg-gray-900"
+          >
+            Save
+          </button>
         </div>
       </div>
     </>
@@ -237,7 +221,6 @@ function ChatHistory(props) {
               })
               .catch((error) => {
                 console.error("Error creating new chat:", error);
-                // Handle any errors here
               });
           }}
         >
@@ -245,53 +228,49 @@ function ChatHistory(props) {
         </button>
       </div>
       <div className="overflow-y-auto">
-      {/* Map through chats */}
-      {chats.map((chat) => (
-        <div
-          key={chat[0]}
-          onClick={() => {
-            props.onChatSelect(chat.id);
-            props.setIsPrivate(chat.model_type);
-            props.setTicker(chat.ticker);
-            if (chat.ticker) {
-              props.setIsEdit(0);
-              props.setShowChatbot(true);
-            }
-            props.setcurrTask(chat.associated_task);
-            props.setCurrChatName(chat.chat_name);
-          }}
-          className={`flex items-center justify-between hover:bg-[#3A3B41] px-6 rounded cursor-pointer ${
-            props.selectedChatId === chat.id ? "bg-gray-700" : ""
-          }`}
-          //className={`flex items-center justify-between hover:bg-[#3A3B41] px-6 rounded cursor-pointer ${
-          //  props.selectedChatId === chat.id ? "bg-gradient-to-r from-[#2E5C82] to-[#50B7C3]" : ""
-          //}`}
-        >
-          <div className="flex items-center p-2 my-1 rounded-lg  mr-2">
-            {chat.chat_name}
+        {chats.map((chat) => (
+          <div
+            key={chat[0]}
+            onClick={() => {
+              props.onChatSelect(chat.id);
+              props.setIsPrivate(chat.model_type);
+              props.setTicker(chat.ticker);
+              if (chat.ticker) {
+                props.setIsEdit(0);
+                props.setShowChatbot(true);
+              }
+              props.setcurrTask(chat.associated_task);
+              props.setCurrChatName(chat.chat_name);
+            }}
+            className={`flex items-center justify-between hover:bg-[#3A3B41] px-6 rounded cursor-pointer ${
+              props.selectedChatId === chat.id ? "bg-gray-700" : ""
+            }`}
+          >
+            <div className="flex items-center p-2 my-1 rounded-lg mr-2">
+              {chat.chat_name}
+            </div>
+            <div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRenameChat(chat.id);
+                }}
+                className="p-2 rounded-full"
+              >
+                <FontAwesomeIcon icon={faPen} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteChat(chat.id);
+                }}
+                className="p-2 rounded-full"
+              >
+                <FontAwesomeIcon icon={faTrashCan} />
+              </button>
+            </div>
           </div>
-          <div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRenameChat(chat.id);
-              }}
-              className="p-2 rounded-full "
-            >
-              <FontAwesomeIcon icon={faPen} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDeleteChat(chat.id);
-              }}
-              className="p-2 rounded-full"
-            >
-              <FontAwesomeIcon icon={faTrashCan} />
-            </button>
-          </div>
-        </div>
-      ))}
+        ))}
       </div>
     </div>
   );

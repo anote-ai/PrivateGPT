@@ -1,4 +1,4 @@
-import React, { Component, useState, useEffect } from "react";
+import React, { useState } from "react";
 import Navbarchatbot from "./NavbarChatbot";
 import Chatbot from "./Chatbot";
 import "../styles/Chatbot.css";
@@ -11,13 +11,12 @@ function HomeChatbot() {
   const [forceUpdate, setForceUpdate] = useState(0);
   const [isPrivate, setIsPrivate] = useState(0);
   const [currChatName, setCurrChatName] = useState("");
-  const [currTask, setcurrTask] = useState(0); //0 is file upload, 1 EDGAR, 2 mySQL db; have 0 be the default
+  const [currTask, setcurrTask] = useState(0); // 0=file upload, 1=EDGAR
   const [ticker, setTicker] = useState("");
   const [showChatbot, setShowChatbot] = useState(false);
-  const [isEdit, setIsEdit] = useState(0); //for whether you can currently edit the ticker or not
+  const [isEdit, setIsEdit] = useState(0);
   const [activeMessageIndex, setActiveMessageIndex] = useState(null);
-  const [relevantChunk, setRelevantChunk] = useState('');
-
+  const [relevantChunk, setRelevantChunk] = useState("");
   const [confirmedModelKey, setConfirmedModelKey] = useState("");
 
   const handleChatSelect = (chatId) => {
@@ -42,20 +41,7 @@ function HomeChatbot() {
 
     const response_data = await response.json();
     handleChatSelect(response_data.chat_id);
-
     return response_data.chat_id;
-  };
-
-  const testClick = () => {
-    fetcher("temp-test", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    }).catch((e) => {
-      console.error(e.error);
-    });
   };
 
   return (
@@ -95,6 +81,7 @@ function HomeChatbot() {
             activeMessageIndex={activeMessageIndex}
             setActiveMessageIndex={setActiveMessageIndex}
             setRelevantChunk={setRelevantChunk}
+            createNewChat={createNewChat}
           />
         )}
         {currTask === 1 && (

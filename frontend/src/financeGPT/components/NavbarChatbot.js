@@ -1,27 +1,16 @@
 import React, { useState, useEffect } from "react";
-//import NavLinks from "./NavLinksChatbot"; Changed from using nav to showing all on same page
-import Switch from "react-switch";
 import fetcher from "../../http/RequestConfig";
 import ChatHistory from "./ChatHistory";
 
 function NavbarChatbot(props) {
   const [showConfirmPopup, setShowConfirmPopup] = useState(false);
-
   const [showConfirmModelKey, setShowConfirmModelKey] = useState(false);
   const [showErrorKeyMessage, setShowErrorKeyMesage] = useState(false);
   const [showConfirmResetKey, setShowConfirmResetKey] = useState(false);
   const [pendingModel, setPendingModel] = useState(props.isPrivate);
   const [modelKey, setModelKey] = useState("");
 
-  const urlObject = new URL(window.location.origin);
-  var hostname = urlObject.hostname;
-  if (hostname.startsWith("www.")) {
-    hostname = hostname.substring(4);
-  }
-  urlObject.hostname = `dashboard.${hostname}`;
-
   useEffect(() => {
-    //changeChatMode(props.isPrivate);
     props.handleForceUpdate();
   }, [props.isPrivate]);
 
@@ -35,7 +24,7 @@ function NavbarChatbot(props) {
   };
 
   const confirmSwitchChange = () => {
-    props.setIsPrivate((prevState) => 1 - prevState); //toggle true or false
+    props.setIsPrivate((prevState) => 1 - prevState);
     changeChatMode(props.isPrivate);
     setShowConfirmPopup(false);
   };
@@ -59,7 +48,6 @@ function NavbarChatbot(props) {
     setShowErrorKeyMesage(false);
   };
 
-
   const confirmResetModel = () => {
     resetChat();
     addModelKeyToDb(null);
@@ -72,7 +60,7 @@ function NavbarChatbot(props) {
   };
 
   const addModelKeyToDb = async (model_key_db) => {
-    const response = await fetcher("add-model-key", {
+    await fetcher("add-model-key", {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -87,7 +75,7 @@ function NavbarChatbot(props) {
   };
 
   const resetChat = async () => {
-    const response = await fetcher("reset-chat", {
+    await fetcher("reset-chat", {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -99,7 +87,7 @@ function NavbarChatbot(props) {
   };
 
   const changeChatMode = async (isPrivate) => {
-    const response = await fetcher("change-chat-mode", {
+    await fetcher("change-chat-mode", {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -108,14 +96,20 @@ function NavbarChatbot(props) {
       body: JSON.stringify({
         chat_id: props.selectedChatId,
         model_type: isPrivate,
-      }), //model_type=1 when mistral, model_type=0 when llama
-    })
-      .then((response) => {
-      })
-      .catch((e) => {
-        console.error(e.error);
-      });
+      }),
+    }).catch((e) => {
+      console.error(e.error);
+    });
+  };
 
+  const overlayStyle = {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    zIndex: 999,
   };
 
   const confirmPopup = showConfirmPopup ? (
@@ -156,17 +150,7 @@ function NavbarChatbot(props) {
 
   const confirmResetModelPopup = showConfirmResetKey ? (
     <>
-      <div
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(0, 0, 0, 0.5)", // Semi-transparent black
-          zIndex: 999, // Ensure it's below the modal but above everything else
-        }}
-      ></div>
+      <div style={overlayStyle} />
       <div
         style={{
           position: "fixed",
@@ -205,17 +189,7 @@ function NavbarChatbot(props) {
 
   const errorKeyPopup = showErrorKeyMessage ? (
     <>
-      <div
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(0, 0, 0, 0.5)", // Semi-transparent black
-          zIndex: 999, // Ensure it's below the modal but above everything else
-        }}
-      ></div>
+      <div style={overlayStyle} />
       <div
         style={{
           position: "fixed",
@@ -245,31 +219,14 @@ function NavbarChatbot(props) {
     </>
   ) : null;
 
-  const overlayStyle = {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    zIndex: 999, // Ensure it's below the popup but above everything else
-  };
-
   return (
-    // <nav className="relative h-screen left-0 w-44 bg-[#1A1922] text-white z-30">
-    //   <div className="flex flex-col items-center font-medium justify-around h-full">
     <>
-      {showConfirmPopup && <div style={overlayStyle}></div>}
+      {showConfirmPopup && <div style={overlayStyle} />}
       <nav className="flex flex-col h-screen text-white">
         {confirmPopup}
         {errorKeyPopup}
         {confirmResetModelPopup}
         <div className="flex-1 overflow-y-auto">
-          {/* <div className="p-5 w-full flex justify-center">
-            <div className="text-3xl mt-4" onClick={() => props.setOpen(!props.open)}>
-              <FontAwesomeIcon icon={props.open ? faXmark : faBars} />
-            </div>
-          </div> */}
           <div className="flex-1 overflow-y-auto bg-[#2A2C38] my-2 rounded-xl">
             <ul className="my-4">
               <div className="mx-4 my-2">
@@ -278,12 +235,8 @@ function NavbarChatbot(props) {
                 </h2>
               </div>
               <div className="mx-4 my-2">
-                {/*<NavLinks /> remove this because we are not going to a different page anymore*/}
                 <ul className="space-y-1 bg-[#2A2C38]">
-                  <button
-                    className="w-full"
-                    onClick={() => props.setcurrTask(0)}
-                  >
+                  <button className="w-full" onClick={() => props.setcurrTask(0)}>
                     <a
                       className={`flex items-center px-3 py-2 text-lg font-medium text-gray-100 rounded transition-colors ${
                         props.currTask === 0
@@ -296,10 +249,7 @@ function NavbarChatbot(props) {
                   </button>
                 </ul>
                 <ul className="space-y-1 bg-[#2A2C38]">
-                  <button
-                    className="w-full"
-                    onClick={() => props.setcurrTask(1)}
-                  >
+                  <button className="w-full" onClick={() => props.setcurrTask(1)}>
                     <a
                       className={`flex items-center px-3 py-2 text-lg font-medium text-gray-100 rounded transition-colors ${
                         props.currTask === 1
@@ -311,24 +261,6 @@ function NavbarChatbot(props) {
                     </a>
                   </button>
                 </ul>
-                {/*}
-                <ul className="space-y-1 bg-[#2A2C38]">
-                  <button
-                    className="w-full"
-                    onClick={() => props.setcurrTask(2)}
-                  >
-                    <a
-                      className={`flex items-center px-3 py-2 text-lg font-medium text-gray-100 rounded transition-colors ${
-                        props.currTask === 2
-                          ? "text-white bg-gradient-to-r from-[#2E5C82] to-[#50B7C3]"
-                          : "hover:text-white hover:bg-gray-700"
-                      }`}
-                    >
-                      MySQL Connector
-                    </a>
-                  </button>
-                </ul>
-                    */}
               </div>
             </ul>
           </div>
@@ -354,13 +286,6 @@ function NavbarChatbot(props) {
               Settings
             </h2>
             <div className="rounded p-3 mx-3">
-              {/* <div className="mb-5">
-                <div className="font-semibold">Private</div>
-                <select name="privateOptions" id="privateOptions">
-                  <option value="LLaMA">LLaMA</option>
-                  <option value="GPT4All">GPT4All</option>
-                </select>
-              </div> */}
               <div className="flex items-center justify-between">
                 <div className="font-semibold">Private Model</div>
                 <select

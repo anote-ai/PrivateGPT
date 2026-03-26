@@ -56,9 +56,8 @@ def update_chat_name_db(chat_id, new_name):
 
     query = """
     UPDATE chats
-    JOIN users ON chats.user_id = users.id
-    SET chats.chat_name = ?
-    WHERE chats.id = ? AND users.id = ?;
+    SET chat_name = ?
+    WHERE id = ? AND user_id = ?;
     """
     cursor.execute(query, (new_name, chat_id, USER_ID))
 
@@ -229,11 +228,10 @@ def change_chat_mode_db(chat_mode_to_change_to, chat_id):
 
     query = """
     UPDATE chats
-    JOIN users ON chats.user_id = users.id
-    SET chats.model_type = ?
-    WHERE chats.id = ? AND users.id = ?;
+    SET model_type = ?
+    WHERE id = ? AND user_id = ?;
     """
-    
+
     # Execute the query
     cursor.execute(query, (chat_mode_to_change_to, chat_id, USER_ID))
 
@@ -452,19 +450,19 @@ def delete_doc_from_db(doc_id):
 
     return "success"
 
-def add_model_key_to_db(model_key, chat_id, user_email):
+def add_model_key_to_db(model_key, chat_id, user_email=None):
     conn, cursor = get_db_connection()
 
     update_query = """
         UPDATE chats
-        JOIN users ON chats.user_id = users.id
-        SET chats.custom_model_key = ?
-        WHERE chats.id = ? AND users.email = ?;
+        SET custom_model_key = ?
+        WHERE id = ? AND user_id = ?;
         """
 
     cursor.execute(update_query, (model_key, chat_id, USER_ID))
 
     conn.commit()
+    conn.close()
 
 #For edgar
 queryApi = QueryApi(api_key=sec_api_key)

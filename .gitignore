@@ -10,4 +10,4 @@ backend/api_endpoints/financeGPT/database.db
 backend/database.db
 backend/database/database.db
 
-out/
+out/.claude/

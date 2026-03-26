@@ -1,23 +1,23 @@
-import React, { Component, useState, useEffect } from "react";
+import React, { useState } from "react";
 import Navbarchatbot from "./NavbarChatbot";
 import Chatbot from "./Chatbot";
 import "../styles/Chatbot.css";
 import SidebarChatbot from "./SidebarChatbot";
 import fetcher from "../../http/RequestConfig";
 import ChatbotEdgar from "./chatbot_subcomponents/ChatbotEdgar";
+import ChatbotTranslation from "./chatbot_subcomponents/ChatbotTranslation";
 
 function HomeChatbot() {
   const [selectedChatId, setSelectedChatId] = useState(null);
   const [forceUpdate, setForceUpdate] = useState(0);
   const [isPrivate, setIsPrivate] = useState(0);
   const [currChatName, setCurrChatName] = useState("");
-  const [currTask, setcurrTask] = useState(0); //0 is file upload, 1 EDGAR, 2 mySQL db; have 0 be the default
+  const [currTask, setcurrTask] = useState(0); // 0=File Upload, 1=EDGAR, 2=Translation
   const [ticker, setTicker] = useState("");
   const [showChatbot, setShowChatbot] = useState(false);
-  const [isEdit, setIsEdit] = useState(0); //for whether you can currently edit the ticker or not
+  const [isEdit, setIsEdit] = useState(0);
   const [activeMessageIndex, setActiveMessageIndex] = useState(null);
-  const [relevantChunk, setRelevantChunk] = useState('');
-
+  const [relevantChunk, setRelevantChunk] = useState("");
   const [confirmedModelKey, setConfirmedModelKey] = useState("");
 
   const handleChatSelect = (chatId) => {
@@ -29,38 +29,39 @@ function HomeChatbot() {
   };
 
   const createNewChat = async () => {
-    const response = await fetcher("create-new-chat", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ chat_type: currTask, model_type: isPrivate }),
-    }).catch((e) => {
-      console.error(e.error);
-    });
-
-    const response_data = await response.json();
-    handleChatSelect(response_data.chat_id);
-
-    return response_data.chat_id;
+    try {
+      const response = await fetcher("create-new-chat", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_type: currTask, model_type: isPrivate }),
+      });
+      const response_data = await response.json();
+      handleChatSelect(response_data.chat_id);
+      return response_data.chat_id;
+    } catch (e) {
+      console.error("Error creating new chat:", e);
+    }
   };
 
-  const testClick = () => {
-    fetcher("temp-test", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    }).catch((e) => {
-      console.error(e.error);
-    });
+  const sharedChatbotProps = {
+    selectedChatId,
+    handleChatSelect,
+    handleForceUpdate,
+    forceUpdate,
+    isPrivate,
+    currChatName,
+    confirmedModelKey,
+    setCurrChatName,
+    activeMessageIndex,
+    setActiveMessageIndex,
+    setRelevantChunk,
+    createNewChat,
   };
 
   return (
-    <div className="flex flex-row mt-2">
-      <div className="w-[20%]">
+    <div className="flex flex-row mt-2 min-h-screen bg-[#0D0F18]">
+      {/* Left nav */}
+      <div className="w-[20%] px-2">
         <Navbarchatbot
           selectedChatId={selectedChatId}
           onChatSelect={handleChatSelect}
@@ -80,66 +81,57 @@ function HomeChatbot() {
           forceUpdate={forceUpdate}
         />
       </div>
-      <div className="w-[60%] mx-4">
+
+      {/* Main content */}
+      <div className="w-[60%] mx-2">
         {currTask === 0 && (
           <Chatbot
             chat_type={currTask}
-            selectedChatId={selectedChatId}
-            handleChatSelect={handleChatSelect}
-            handleForceUpdate={handleForceUpdate}
-            forceUpdate={forceUpdate}
-            isPrivate={isPrivate}
-            currChatName={currChatName}
-            confirmedModelKey={confirmedModelKey}
-            setCurrChatName={setCurrChatName}
-            activeMessageIndex={activeMessageIndex}
-            setActiveMessageIndex={setActiveMessageIndex}
-            setRelevantChunk={setRelevantChunk}
+            {...sharedChatbotProps}
           />
         )}
         {currTask === 1 && (
           <ChatbotEdgar
             chat_type={currTask}
-            selectedChatId={selectedChatId}
-            createNewChat={createNewChat}
-            handleChatSelect={handleChatSelect}
-            handleForceUpdate={handleForceUpdate}
-            forceUpdate={forceUpdate}
-            isPrivate={isPrivate}
-            currChatName={currChatName}
             ticker={ticker}
             setTicker={setTicker}
             showChatbot={showChatbot}
             setShowChatbot={setShowChatbot}
             isEdit={isEdit}
             setIsEdit={setIsEdit}
+            {...sharedChatbotProps}
+          />
+        )}
+        {currTask === 2 && (
+          <ChatbotTranslation
+            selectedChatId={selectedChatId}
             confirmedModelKey={confirmedModelKey}
-            setCurrChatName={setCurrChatName}
-            activeMessageIndex={activeMessageIndex}
-            setActiveMessageIndex={setActiveMessageIndex}
-            setRelevantChunk={setRelevantChunk}
           />
         )}
       </div>
-      <div className="w-[20%] mt-2">
-        <SidebarChatbot
-          selectedChatId={selectedChatId}
-          chat_type={currTask}
-          createNewChat={createNewChat}
-          onChatSelect={handleChatSelect}
-          handleForceUpdate={handleForceUpdate}
-          forceUpdate={forceUpdate}
-          setIsPrivate={setIsPrivate}
-          setCurrChatName={setCurrChatName}
-          setcurrTask={setcurrTask}
-          setTicker={setTicker}
-          setShowChatbot={setShowChatbot}
-          setIsEdit={setIsEdit}
-          setConfirmedModelKey={setConfirmedModelKey}
-          relevantChunk={relevantChunk}
-          activeMessageIndex={activeMessageIndex}
-        />
-      </div>
+
+      {/* Right sidebar — hide for translation mode */}
+      {currTask !== 2 && (
+        <div className="w-[20%] mt-2 px-2">
+          <SidebarChatbot
+            selectedChatId={selectedChatId}
+            chat_type={currTask}
+            createNewChat={createNewChat}
+            onChatSelect={handleChatSelect}
+            handleForceUpdate={handleForceUpdate}
+            forceUpdate={forceUpdate}
+            setIsPrivate={setIsPrivate}
+            setCurrChatName={setCurrChatName}
+            setcurrTask={setcurrTask}
+            setTicker={setTicker}
+            setShowChatbot={setShowChatbot}
+            setIsEdit={setIsEdit}
+            setConfirmedModelKey={setConfirmedModelKey}
+            relevantChunk={relevantChunk}
+            activeMessageIndex={activeMessageIndex}
+          />
+        </div>
+      )}
     </div>
   );
 }

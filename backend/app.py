@@ -360,7 +360,23 @@ def process_message_pdf():
     )
     user_prompt = f"Document sources:\n{sources_str}\n\nQuestion: {query}"
 
-    if model_type == 0:
+    if model_key:
+        # Use custom OpenAI API key
+        try:
+            import openai as _openai
+            client = _openai.OpenAI(api_key=model_key)
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+            )
+            answer = response.choices[0].message.content.strip()
+        except Exception as e:
+            return jsonify({"error": f"OpenAI API error: {str(e)}"}), 500
+    elif model_type == 0:
         try:
             response = ollama.chat(model='llama2', messages=[
                 {'role': 'system', 'content': system_prompt},
@@ -477,12 +493,20 @@ def translate_text_endpoint():
     source_language = request.json.get('source_language', 'Auto-detect')
     target_language = request.json.get('target_language', 'Spanish')
     model_key = request.json.get('model_key', '')
+    chat_id = request.json.get('chat_id')
 
     if not text.strip():
         return jsonify({"error": "No text provided"}), 400
 
     try:
         translation = translate_text(text, source_language, target_language, model_key or None)
+
+        # Persist to DB if we have a chat_id
+        if chat_id:
+            user_message = f"[Translate to {target_language}] {text}"
+            add_message_to_db(user_message, chat_id, 1)
+            add_message_to_db(translation, chat_id, 0)
+
         return jsonify(translation=translation)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

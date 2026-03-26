@@ -454,17 +454,29 @@ def process_ticker_info():
 def infer_chat_name():
     messages = request.json.get('messages', '')
     chat_id = request.json.get('chat_id')
+    model_type = request.json.get('model_type', 1)  # 0=llama2, 1=mistral
 
-    try:
-        response = ollama.chat(model='mistral', messages=[
-            {
-                'role': 'user',
-                'content': f'Generate a short 3-5 word chat title for this conversation snippet. Reply with only the title, no punctuation or quotes:\n\n{messages[:500]}'
-            },
-        ])
-        chat_name = response['message']['content'].strip()[:60]
-    except Exception:
-        chat_name = f"Chat {chat_id}"
+    prompt_msg = [{
+        'role': 'user',
+        'content': f'Generate a short 3-5 word chat title for this conversation snippet. Reply with only the title, no punctuation or quotes:\n\n{messages[:500]}'
+    }]
+
+    # Try preferred model first, then the other, then word-truncation fallback
+    models_to_try = ['mistral', 'llama2'] if model_type == 1 else ['llama2', 'mistral']
+    chat_name = None
+
+    for model in models_to_try:
+        try:
+            response = ollama.chat(model=model, messages=prompt_msg)
+            chat_name = response['message']['content'].strip()[:60]
+            break
+        except Exception:
+            continue
+
+    if not chat_name:
+        # Word-truncation fallback — use first 5 words of the conversation
+        words = messages.strip().split()
+        chat_name = ' '.join(words[:5]) or f'Chat {chat_id}'
 
     update_chat_name_db(chat_id, chat_name)
     return jsonify(chat_name=chat_name)
@@ -477,12 +489,20 @@ def translate_text_endpoint():
     source_language = request.json.get('source_language', 'Auto-detect')
     target_language = request.json.get('target_language', 'Spanish')
     model_key = request.json.get('model_key', '')
+    chat_id = request.json.get('chat_id')
 
     if not text.strip():
         return jsonify({"error": "No text provided"}), 400
 
     try:
         translation = translate_text(text, source_language, target_language, model_key or None)
+
+        # Persist to DB if we have a chat_id
+        if chat_id:
+            user_message = f"[Translate to {target_language}] {text}"
+            add_message_to_db(user_message, chat_id, 1)
+            add_message_to_db(translation, chat_id, 0)
+
         return jsonify(translation=translation)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

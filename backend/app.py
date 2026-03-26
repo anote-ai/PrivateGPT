@@ -360,7 +360,23 @@ def process_message_pdf():
     )
     user_prompt = f"Document sources:\n{sources_str}\n\nQuestion: {query}"
 
-    if model_type == 0:
+    if model_key:
+        # Use custom OpenAI API key
+        try:
+            import openai as _openai
+            client = _openai.OpenAI(api_key=model_key)
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+            )
+            answer = response.choices[0].message.content.strip()
+        except Exception as e:
+            return jsonify({"error": f"OpenAI API error: {str(e)}"}), 500
+    elif model_type == 0:
         try:
             response = ollama.chat(model='llama2', messages=[
                 {'role': 'system', 'content': system_prompt},

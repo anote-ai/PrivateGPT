@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  backend-lint:
-    name: Backend — Lint
+  backend-test:
+    name: Backend — Lint & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,10 +19,12 @@ jobs:
         working-directory: backend
         run: |
           pip install --upgrade pip
-          pip install ruff
+          pip install ruff pytest pytest-mock
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       - name: Lint
         run: ruff check backend/ --ignore E501 || true
+      - name: Run pytest
+        run: pytest backend/tests/ -v --tb=short
 
   frontend-build:
     name: Frontend — Build
@@ -37,9 +39,5 @@ jobs:
         run: npm ci --legacy-peer-deps
       - name: Build frontend assets
         working-directory: frontend
-        run: |
-          if [ -f package.json ]; then
-            npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-            npm run build 2>/dev/null || echo "No build script, skipping"
-          fi
+        run: npm run build 2>/dev/null || echo "No build script, skipping"
         continue-on-error: true

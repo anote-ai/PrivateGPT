@@ -34,8 +34,8 @@ config = {
 
 CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True)
 
-process_status_llama = {"running": False, "output": "", "error": ""}
-process_status_mistral = {"running": False, "output": "", "error": ""}
+process_status_llama = {"running": False, "output": "", "error": "", "progress": 0, "time_left": ""}
+process_status_mistral = {"running": False, "output": "", "error": "", "progress": 0, "time_left": ""}
 
 @app.before_request
 def before_request():
@@ -152,7 +152,10 @@ def run_llama():
     if not process_status_llama["running"]:
         process_status_llama["running"] = True
         process_status_llama["completed"] = False
-        threading.Thread(target=run_llama_async()).start()
+        process_status_llama["error"] = ""
+        process_status_llama["progress"] = 0
+        process_status_llama["time_left"] = ""
+        threading.Thread(target=run_llama_async).start()
         return jsonify({"success": True, "message": "Ollama run initiated."})
     else:
         return jsonify({"success": False, "message": "Ollama run is already in progress."})
@@ -163,6 +166,9 @@ def run_mistral():
     if not process_status_mistral["running"]:
         process_status_mistral["running"] = True
         process_status_mistral["completed"] = False
+        process_status_mistral["error"] = ""
+        process_status_mistral["progress"] = 0
+        process_status_mistral["time_left"] = ""
         threading.Thread(target=run_mistral_async).start()
         return jsonify({"success": True, "message": "Mistral run initiated."})
     else:

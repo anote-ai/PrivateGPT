@@ -1,13 +1,8 @@
-import { React, useState, useEffect } from "react";
-import fetcher from "../../http/RequestConfig";
+import React, { useState, useEffect } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faChevronDown,
   faChevronUp,
-  faCommentDots,
-  faPen,
-  faPenToSquare,
-  faTrashCan,
 } from "@fortawesome/free-solid-svg-icons";
 
 function Sources(props) {
@@ -67,7 +62,7 @@ function Sources(props) {
           Sources
         </h2>
       </div>
-      {props.activeMessageIndex &&
+      {props.activeMessageIndex !== null && props.activeMessageIndex !== undefined &&
         sourcesInfo.map((info, index) => (
           <div
             key={index}

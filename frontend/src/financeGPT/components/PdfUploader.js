@@ -87,7 +87,6 @@
 //   );
 //                 }
 
-import axios from "axios";
 import React, { useRef, useState } from "react";
 import { Document, Page } from "react-pdf";
 import { pdfjs } from "react-pdf";
@@ -202,6 +201,7 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
     const files = e.target.files;
     const chatId = chat_id;
   
+    setFile(files);
     setIsUploading(true);
   
     try {

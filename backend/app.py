@@ -152,7 +152,7 @@ def run_llama():
     if not process_status_llama["running"]:
         process_status_llama["running"] = True
         process_status_llama["completed"] = False
-        threading.Thread(target=run_llama_async()).start()
+        threading.Thread(target=run_llama_async, daemon=True).start()
         return jsonify({"success": True, "message": "Ollama run initiated."})
     else:
         return jsonify({"success": False, "message": "Ollama run is already in progress."})
@@ -163,7 +163,7 @@ def run_mistral():
     if not process_status_mistral["running"]:
         process_status_mistral["running"] = True
         process_status_mistral["completed"] = False
-        threading.Thread(target=run_mistral_async).start()
+        threading.Thread(target=run_mistral_async, daemon=True).start()
         return jsonify({"success": True, "message": "Mistral run initiated."})
     else:
         return jsonify({"success": False, "message": "Ollama run is already in progress."})

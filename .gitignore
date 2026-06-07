@@ -6,8 +6,10 @@ node_modules
 .DS_Store
 backend/.DS_Store
 .env
+backend/.env
 backend/api_endpoints/financeGPT/database.db
 backend/database.db
 backend/database/database.db
+backend/client_secret.json
 
 out/

@@ -1,6 +1,9 @@
+import os
 from datetime import timedelta
+from dotenv import load_dotenv
 from db_enums import PaidUserStatus
-from enum import IntEnum
+
+load_dotenv()
 
 kSessionTokenExpirationTime = timedelta(days=90)
 kPasswordResetExpirationTime = timedelta(minutes=15)
@@ -12,9 +15,9 @@ productHashMap = {
 }
 
 priceToPaymentPlan = {
-    "price_1Ne91bAuWN19h35KS9n8iokr" : PaidUserStatus.BASIC_TIER,
-    "price_1Ne91NAuWN19h35KHFQtLZsQ" : PaidUserStatus.STANDARD_TIER,
-    "price_1Ne90vAuWN19h35Kb3DIpkfu" : PaidUserStatus.PREMIUM_TIER
+    "price_1Ne91bAuWN19h35KS9n8iokr": PaidUserStatus.BASIC_TIER,
+    "price_1Ne91NAuWN19h35KHFQtLZsQ": PaidUserStatus.STANDARD_TIER,
+    "price_1Ne90vAuWN19h35Kb3DIpkfu": PaidUserStatus.PREMIUM_TIER
 }
 
 planToCredits = {
@@ -33,10 +36,7 @@ planToSearches = {
 
 chatgptLimit = 10000
 
-dbName = "privategpt"
-dbHost = "privategpt-db.ctoizzxupont.us-east-1.rds.amazonaws.com"
-dbPassword = "hE38Rp9ah122mG9ifg4D"
-dbUser = "admin"
-
-# TODO: COMMENT OUT WHEN DEPLOY TO PROD
-dbName = "financegpt"
+dbName = os.environ.get("DB_NAME", "privategpt")
+dbHost = os.environ.get("DB_HOST", "localhost")
+dbPassword = os.environ.get("DB_PASSWORD", "")
+dbUser = os.environ.get("DB_USER", "admin")

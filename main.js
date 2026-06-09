@@ -21,11 +21,18 @@ const server = express();
 // Serve static files from the React app
 const staticPath = path.join(__dirname, "./frontend/build");
 server.use(express.static(staticPath));
+server.get("/downloads/chat-history.csv", (req, res) => {
+    res.download(path.join(__dirname, "output_document", "chat_history.csv"));
+});
+server.get("/downloads/finetune-chat-history.jsonl", (req, res) => {
+    res.download(path.join(__dirname, "output_document", "finetune_chat_history.jsonl"));
+});
 
 // Start the server
-const PORT = 3000; // You can choose any port
-server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+const FRONTEND_PORT = 3000;
+const BACKEND_PORT = 5000;
+server.listen(FRONTEND_PORT, () => {
+    console.log(`Server running on http://localhost:${FRONTEND_PORT}`);
 });
 
 function createMainWindow() {
@@ -39,10 +46,10 @@ function createMainWindow() {
         show: false // Initially don't show the window
     });
 
-    mainWindow.loadURL(`http://localhost:${PORT}`);
+    mainWindow.loadURL(`http://localhost:${FRONTEND_PORT}`);
     mainWindow.once('ready-to-show', () => {
-        console.log("Main window is ready to show, waiting for delay...");
-        // Do not call mainWindow.show() here
+        mainWindow.show();
+        console.log("Main window shown.");
     });
 
     //mainWindow.webContents.openDevTools();
@@ -69,27 +76,39 @@ function createWindow() {
         console.error("Failed to start Flask process:", err);
     });
 
-    createMainWindow(); // Initialize the window but don't show it yet
+    function pingBackend() {
+        const request = http.request(
+            {
+                hostname: "127.0.0.1",
+                port: BACKEND_PORT,
+                path: "/check-models",
+                method: "POST",
+                timeout: 1000,
+            },
+            (res) => {
+                res.resume();
 
-    function pingServer() {
-        http.get(`http://localhost:${PORT}`, (res) => {
-            if (res.statusCode === 200 && !mainWindow.isVisible()) {
-                console.log("Flask server is ready. Waiting an additional 3 seconds before showing the main window.");
-                // Wait an additional 2 seconds before showing the main window
-                setTimeout(() => {
-                    mainWindow.show();
-                    console.log("Main window shown.");
-                }, 3000); // Additional 3 seconds delay
-            } else {
-                setTimeout(pingServer, 3000);
+                if (res.statusCode === 200) {
+                    console.log("Flask backend is ready. Loading main window.");
+                    createMainWindow();
+                } else {
+                    setTimeout(pingBackend, 1000);
+                }
             }
-        }).on('error', () => {
-            setTimeout(pingServer, 3000);
+        );
+
+        request.on("timeout", () => {
+            request.destroy();
         });
+
+        request.on("error", () => {
+            setTimeout(pingBackend, 1000);
+        });
+
+        request.end();
     }
 
-
-    setTimeout(pingServer, 5000); // Initial delay before starting to ping
+    pingBackend();
 
 }
 

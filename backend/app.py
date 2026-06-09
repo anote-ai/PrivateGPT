@@ -2,9 +2,9 @@ from flask import Flask, request, jsonify, abort, redirect, send_file
 from flask_cors import CORS, cross_origin
 from dotenv import load_dotenv
 #from tika import parser as p
-import openai
 import os
 import csv
+import json
 import ollama
 import subprocess
 import threading
@@ -242,8 +242,46 @@ def download_chat_history():
             writer.writerows(paired_messages)
 
         return "success"
-    except:
-        return "error"
+    except Exception as e:
+        print("Error downloading chat history:", e)
+        return "error", 500
+
+
+@app.route('/download-finetune-history', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def download_finetune_history():
+    try:
+        chat_type = request.json.get('chat_type')
+        chat_id = request.json.get('chat_id')
+
+        messages = retrieve_message_from_db(chat_id, chat_type)
+
+        output_directory = 'output_document'
+        if not os.path.exists(output_directory):
+            os.makedirs(output_directory)
+
+        file_path = os.path.join(output_directory, 'finetune_chat_history.jsonl')
+
+        examples_written = 0
+        with open(file_path, 'w', encoding='utf-8') as file:
+            for i in range(len(messages) - 1):
+                if messages[i]['sent_from_user'] == 1 and messages[i + 1]['sent_from_user'] == 0:
+                    record = {
+                        "messages": [
+                            {"role": "user", "content": messages[i]['message_text']},
+                            {"role": "assistant", "content": messages[i + 1]['message_text']},
+                        ]
+                    }
+                    file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    examples_written += 1
+
+        if examples_written == 0:
+            return jsonify({"error": "No complete user and assistant message pairs were found to export."}), 400
+
+        return "success"
+    except Exception as e:
+        print("Error exporting fine-tune history:", e)
+        return "error", 500
 
 @app.route('/create-new-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
@@ -319,7 +357,7 @@ def get_text_from_single_file(file):
     reader = PyPDF2.PdfReader(file)
     text = ""
     for page_num in range(len(reader.pages)):
-        text += reader.pages[page_num].extract_text()
+        text += reader.pages[page_num].extract_text() or ""
 
 
     return text
@@ -334,22 +372,42 @@ def ingest_pdfs():
 @app.route('/ingest-files/<chat_id>/<upload_token>', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def ingest_files(chat_id, upload_token):
-    files = request.files.getlist('files[]')
-    MAX_CHUNK_SIZE = 1000
+    try:
+        files = request.files.getlist('files[]')
+        MAX_CHUNK_SIZE = 1200
 
-    for file in files:
-        print("test")
-        text = get_text_from_single_file(file)
-        print('text is', text)
+        if not files:
+            return jsonify({"status": "error", "message": "No files were uploaded."}), 400
 
-        filename = file.filename
+        uploaded_files = []
+        skipped_files = []
 
-        doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
+        for file in files:
+            filename = file.filename or "uploaded.pdf"
+            text = get_text_from_single_file(file)
 
-        if not doesExist:
-            chunk_document(text, MAX_CHUNK_SIZE, doc_id)
+            if not text.strip():
+                return jsonify({
+                    "status": "error",
+                    "message": f"No extractable text was found in {filename}."
+                }), 400
 
-    return jsonify({"status": "success"})
+            doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
+
+            if doesExist:
+                skipped_files.append(filename)
+            else:
+                chunk_document(text, MAX_CHUNK_SIZE, doc_id)
+                uploaded_files.append(filename)
+
+        return jsonify({
+            "status": "success",
+            "uploaded": uploaded_files,
+            "skipped": skipped_files,
+        })
+    except Exception as e:
+        print("Error ingesting files:", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # @app.route('/ingest-pdf', methods=['POST'])
 # @cross_origin(origins='*', supports_credentials=True)
@@ -420,10 +478,39 @@ def reset_chat():
     return reset_chat_db(chat_id)
 
 
+def format_sources_for_prompt(sources):
+    return "\n\n".join(
+        [
+            f"Source {index + 1} ({document_name}):\n{chunk_text.strip()}"
+            for index, (chunk_text, document_name) in enumerate(sources)
+            if chunk_text and chunk_text.strip()
+        ]
+    )
+
+
+def build_private_chat_prompt(query, sources):
+    sources_str = format_sources_for_prompt(sources)
+
+    if sources_str:
+        return (
+            "You are a helpful local assistant. Use the document context when it is relevant. "
+            "If the document context is insufficient, say that clearly, then answer normally "
+            "when the user is asking a general question.\n\n"
+            f"Document context:\n{sources_str}\n\n"
+            f"Question:\n{query}"
+        )
+
+    return (
+        "You are a helpful local assistant. No document context is available for this chat. "
+        "Answer the user normally.\n\n"
+        f"Question:\n{query}"
+    )
+
+
 @app.route('/process-message-pdf', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def process_message_pdf():
-    message = request.json.get('message')
+    message = request.json.get('message') or ""
     chat_id = request.json.get('chat_id')
     model_type = request.json.get('model_type')
     model_key = request.json.get('model_key')
@@ -431,16 +518,17 @@ def process_message_pdf():
     ##Include part where we verify if user actually owns the chat_id later
 
     query = message.strip()
+    if not query:
+        return jsonify({"error": "Message cannot be empty."}), 400
 
     #This adds user message to db
     add_message_to_db(query, chat_id, 1)
 
     #Get most relevant section from the document
-    sources = get_relevant_chunks(2, query, chat_id)
-    sources_str = " ".join([", ".join(str(elem) for elem in source) for source in sources])
-    print("sources_str", sources_str)
+    sources = get_relevant_chunks(4, query, chat_id)
+    prompt = build_private_chat_prompt(query, sources)
 
-    if (model_type == 0):
+    if str(model_type) == "0":
         #if model_key:
         #   model_use = model_key
         #else:
@@ -451,32 +539,35 @@ def process_message_pdf():
             response = ollama.chat(model='llama2', messages=[
                 {
                 'role': 'user',
-                'content': f'You are a factual chatbot that answers questions about uploaded documents. You only answer with answers you find in the text, no outside information. These are the sources from the text:{sources_str} And this is the question:{query}.',
+                'content': prompt,
                 
                 },
             ])
             answer = response['message']['content']
         except Exception as e:
-            return jsonify({"error": "Error with llama2"}), 500
+            print("Error with llama2:", e)
+            return jsonify({"error": f"Error with llama2: {e}"}), 500
     else:
         print("using mistral")
         try:
             response = ollama.chat(model='mistral', messages=[
                 {
                 'role': 'user',
-                'content': f'You are a factual chatbot that answers questions about uploaded documents. You only answer with answers you find in the text, no outside information. These are the sources from the text:{sources_str} And this is the question:{query}.',
+                'content': prompt,
                 
                 },
             ])
             answer = response['message']['content']
         except Exception as e:
-            return jsonify({"error": "Error with Mistral"}), 500
+            print("Error with Mistral:", e)
+            return jsonify({"error": f"Error with Mistral: {e}"}), 500
 
     #This adds bot message
     message_id = add_message_to_db(answer, chat_id, 0)
     
     try:
-        add_sources_to_db(message_id, sources)
+        if sources:
+            add_sources_to_db(message_id, sources)
     except:
         print("error adding sources to db or no sources")
 
@@ -519,7 +610,7 @@ def process_ticker_info():
     ticker = request.json.get('ticker')
 
     if ticker:
-        MAX_CHUNK_SIZE = 1000
+        MAX_CHUNK_SIZE = 1200
 
         reset_uploaded_docs(chat_id)
 

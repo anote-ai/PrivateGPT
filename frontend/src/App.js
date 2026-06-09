@@ -5,6 +5,9 @@ import fetcher from "./http/RequestConfig";
 import HomeChatbot from "./financeGPT/components/Home.js"
 import Installation from "./financeGPT/components/Installation.js"
 
+const wait = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 
 function App() {
   const [modelsExist, setModelsExist] = useState(null);
@@ -13,7 +16,7 @@ function App() {
     mistral_exists: false,
   });
 
-  const checkModelsExist = useCallback(async () => {
+  const checkModelsExist = useCallback(async (attempt = 0) => {
     try {
       const response = await fetcher("check-models", {
         method: "POST",
@@ -33,8 +36,14 @@ function App() {
 
       return responseData;
     } catch (e) {
+      if (attempt < 20) {
+        await wait(1000);
+        return checkModelsExist(attempt + 1);
+      }
+
       console.error("Failed to check models:", e.message);
       setModelsExist(false);
+      setModelStatus({ llama2_exists: false, mistral_exists: false });
       return { llama2_exists: false, mistral_exists: false };
     }
   }, []);

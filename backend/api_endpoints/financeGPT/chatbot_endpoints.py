@@ -1,7 +1,8 @@
 import sqlite3
 import os
-import openai
-import os
+import hashlib
+import re
+from collections import Counter
 #import ray
 import numpy as np
 from sec_api import QueryApi, RenderApi
@@ -15,8 +16,15 @@ sec_api_key="105d85762b9138da11aa136b3313112c93888324437c9aff80c3babfa607ac34"
 
 
 USER_ID = 1
+LOCAL_VECTOR_SIZE = 512
+DEFAULT_CHUNK_OVERLAP = 200
 
-import os
+TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9$%.-]*")
+STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+    "has", "have", "in", "into", "is", "it", "its", "of", "on", "or", "that",
+    "the", "their", "this", "to", "was", "were", "will", "with", "you", "your",
+}
 
 #PROJECT_ROOT = os.path.dirname(os.path.realpath(__file__))
 #DATABASE = os.path.join(PROJECT_ROOT, 'backend', 'database', 'database.db')
@@ -264,7 +272,7 @@ def add_document_to_db(text, document_name, chat_id):
     existing_doc = cursor.fetchone()
 
     if existing_doc:
-        existing_doc_id, existing_doc_text = existing_doc
+        existing_doc_id = existing_doc["id"]
         print("Doc named ", document_name, " exists. Do not create a new entry")
         conn.close()
         return existing_doc_id, True  # Returning the ID of the existing document
@@ -280,20 +288,56 @@ def add_document_to_db(text, document_name, chat_id):
 
     return doc_id, False
 
+
+def normalize_chunk_text(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def tokenize_for_retrieval(text):
+    tokens = TOKEN_RE.findall(text or "")
+    return [
+        token.lower()
+        for token in tokens
+        if len(token) > 1 and token.lower() not in STOPWORDS
+    ]
+
+
+def make_local_embedding(text):
+    vector = np.zeros(LOCAL_VECTOR_SIZE, dtype=np.float32)
+    token_counts = Counter(tokenize_for_retrieval(text))
+
+    for token, count in token_counts.items():
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        bucket = int.from_bytes(digest[:4], "little") % LOCAL_VECTOR_SIZE
+        sign = 1.0 if digest[4] & 1 else -1.0
+        vector[bucket] += sign * (1.0 + np.log1p(count))
+
+    norm = np.linalg.norm(vector)
+    if norm > 0:
+        vector /= norm
+
+    return vector
+
+
 #@ray.remote
-def chunk_document(text, maxChunkSize, document_id):
+def chunk_document(text, maxChunkSize, document_id, overlap=DEFAULT_CHUNK_OVERLAP):
     conn, cursor = get_db_connection()
 
     chunks = []
     startIndex = 0
+    maxChunkSize = max(1, int(maxChunkSize))
+    overlap = min(max(0, int(overlap)), maxChunkSize - 1)
+    stride = maxChunkSize - overlap
     
     while startIndex < len(text):
-        endIndex = startIndex + min(maxChunkSize, len(text))
-        chunkText = text[startIndex:endIndex]
-        chunkText = chunkText.replace("\n", "")
+        endIndex = min(startIndex + maxChunkSize, len(text))
+        chunkText = normalize_chunk_text(text[startIndex:endIndex])
 
-        embeddingVector = openai.embeddings.create(input=chunkText, model="text-embedding-ada-002").data[0].embedding
-        embeddingVector = np.array(embeddingVector)
+        if not chunkText:
+            startIndex += stride
+            continue
+
+        embeddingVector = make_local_embedding(chunkText)
         blob = embeddingVector.tobytes()
         chunks.append({
             "text": chunkText,
@@ -302,7 +346,11 @@ def chunk_document(text, maxChunkSize, document_id):
             "embedding_vector": embeddingVector,
             "embedding_vector_blob": blob,
         })
-        startIndex += maxChunkSize
+
+        if endIndex >= len(text):
+            break
+
+        startIndex += stride
 
     for chunk in chunks:
         cursor.execute('INSERT INTO chunks (start_index, end_index, document_id, embedding_vector) VALUES (?,?,?,?)', [chunk["start_index"], chunk["end_index"], document_id, chunk["embedding_vector_blob"]])
@@ -312,24 +360,50 @@ def chunk_document(text, maxChunkSize, document_id):
 
 
 def knn(x, y):
-    x = np.expand_dims(x, axis=0)
-    # Calculate cosine similarity
-    similarities = np.dot(x, y.T) / (np.linalg.norm(x) * np.linalg.norm(y))
-    # Convert similarities to distances
-    distances = 1 - similarities.flatten()
-    nearest_neighbors = np.argsort(distances)
+    x_norm = np.linalg.norm(x)
+    if x_norm == 0 or len(y) == 0:
+        return []
+
+    y_norms = np.linalg.norm(y, axis=1)
+    valid = y_norms > 0
+    similarities = np.full(len(y), -1.0, dtype=np.float32)
+    similarities[valid] = np.dot(y[valid], x) / (y_norms[valid] * x_norm)
+    nearest_neighbors = np.argsort(-similarities)
 
     results = []
     for i in range(len(nearest_neighbors)):
         item = {
             "index": nearest_neighbors[i],
-            "similarity_score": distances[nearest_neighbors[i]]
+            "similarity_score": similarities[nearest_neighbors[i]]
         }
         results.append(item)
 
     return results
 
-def get_relevant_chunks(k, question, chat_id):
+
+def rebuild_chunks_for_chat(chat_id, maxChunkSize=1200):
+    conn, cursor = get_db_connection()
+
+    cursor.execute("SELECT id, document_text FROM documents WHERE chat_id = ?", (chat_id,))
+    documents = cursor.fetchall()
+
+    cursor.execute(
+        """
+        DELETE FROM chunks
+        WHERE document_id IN (
+            SELECT id FROM documents WHERE chat_id = ?
+        )
+        """,
+        (chat_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    for document in documents:
+        chunk_document(document["document_text"], maxChunkSize, document["id"])
+
+
+def get_relevant_chunks(k, question, chat_id, allow_rebuild=True):
     conn, cursor = get_db_connection()
 
     query = """
@@ -345,21 +419,27 @@ def get_relevant_chunks(k, question, chat_id):
     rows = cursor.fetchall()
 
     embeddings = []
+    valid_rows = []
     for row in rows:
         embeddingVectorBlob = row["embedding_vector"]
-        embeddingVector = np.frombuffer(embeddingVectorBlob)
+        embeddingVector = np.frombuffer(embeddingVectorBlob, dtype=np.float32)
+        if len(embeddingVector) != LOCAL_VECTOR_SIZE:
+            continue
+
         embeddings.append(embeddingVector)
+        valid_rows.append(row)
 
     if (len(embeddings) == 0):
-        res_list = []
-        for i in range(k):
-            res_list.append("No text found")
-        return res_list
+        conn.close()
+        if rows and allow_rebuild:
+            rebuild_chunks_for_chat(chat_id)
+            return get_relevant_chunks(k, question, chat_id, allow_rebuild=False)
+
+        return []
 
     embeddings = np.array(embeddings)
 
-    embeddingVector = openai.embeddings.create(input=question, model="text-embedding-ada-002").data[0].embedding
-    embeddingVector = np.array(embeddingVector)
+    embeddingVector = make_local_embedding(question)
 
     res = knn(embeddingVector, embeddings)
     num_results = min(k, len(res))
@@ -369,16 +449,17 @@ def get_relevant_chunks(k, question, chat_id):
     for i in range(num_results):
         source_id = res[i]['index']
 
-        document_id = rows[source_id]['document_id']
-        page_number = rows[source_id]['page_number']
-        document_name = rows[source_id]['document_name']
+        document_id = valid_rows[source_id]['document_id']
+        document_name = valid_rows[source_id]['document_name']
 
 
         cursor.execute('SELECT document_text FROM documents WHERE id = ?', (document_id,))
         doc_text = cursor.fetchone()['document_text']
 
-        source_chunk = doc_text[rows[source_id]['start_index']:rows[source_id]['end_index']]
+        source_chunk = doc_text[valid_rows[source_id]['start_index']:valid_rows[source_id]['end_index']]
         source_chunks.append((source_chunk, document_name))
+
+    conn.close()
 
     return source_chunks
 
@@ -556,7 +637,7 @@ def get_text_from_single_file(file):
 
     for page_num in range(len(reader.pages)):
 
-        text += reader.pages[page_num].extract_text()
+        text += reader.pages[page_num].extract_text() or ""
 
     return text
 

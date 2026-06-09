@@ -106,6 +106,7 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
   const [file, setFile] = useState();
   const [numPages, setNumPages] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
   const fileInputRef = useRef();
 
   const onDocumentLoadSuccess = ({ numPages }) => {
@@ -125,6 +126,20 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
     fontSize: "1.5rem",
     color: "white",
     zIndex: 1000,
+  };
+
+  const statusStyle = {
+    position: "fixed",
+    left: "50%",
+    bottom: "84px",
+    transform: "translateX(-50%)",
+    maxWidth: "80%",
+    backgroundColor: "#374151",
+    borderRadius: "8px",
+    padding: "8px 12px",
+    color: "white",
+    fontSize: "0.875rem",
+    zIndex: 1001,
   };
 
   // const uploadFile = async (e) => {
@@ -169,9 +184,14 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
       });
   
       const result = await response.json();
+      if (!response.ok || !result.uploadUrl) {
+        throw new Error("Could not prepare the upload.");
+      }
+
       return result.uploadUrl;
     } catch (error) {
       console.error("Error uploading metadata", error);
+      throw error;
     }
   };
   
@@ -192,26 +212,47 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
       });
   
       const result = await response.json();
+      if (!response.ok || result.status !== "success") {
+        throw new Error(result.message || "Could not upload the selected file.");
+      }
+
       console.log("Files uploaded:", result);
+      return result;
     } catch (error) {
       console.error("Error uploading files", error);
+      throw error;
     }
   };
   
   const uploadFile = async (e) => {
     const files = e.target.files;
     const chatId = chat_id;
+
+    if (!files.length) {
+      return;
+    }
+
+    if (!chatId) {
+      setUploadStatus("Create or select a chat before uploading documents.");
+      return;
+    }
   
     setIsUploading(true);
+    setUploadStatus("");
   
     try {
       const uploadUrl = await uploadMetadata(chatId);
       await uploadFiles(files, uploadUrl);
-      setIsUploading(false);
+      setUploadStatus(
+        `${files.length} document${files.length === 1 ? "" : "s"} uploaded successfully.`
+      );
       handleForceUpdate();
     } catch (error) {
       console.error("Error during file upload", error);
+      setUploadStatus(error.message || "Document upload failed.");
+    } finally {
       setIsUploading(false);
+      e.target.value = "";
     }
   };
   
@@ -225,6 +266,7 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
       {isUploading && (
         <div style={splashScreenStyle}>Processing Document...</div>
       )}
+      {uploadStatus && <div style={statusStyle}>{uploadStatus}</div>}
       <input
         type="file"
         style={{ display: "none" }}

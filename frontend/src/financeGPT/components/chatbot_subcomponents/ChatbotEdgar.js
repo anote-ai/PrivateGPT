@@ -27,6 +27,7 @@ const ChatbotEdgar = (props) => {
   const [showEditModal, setShowEditModal] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState("");
 
   //initial state
   useEffect(() => {
@@ -65,8 +66,10 @@ const ChatbotEdgar = (props) => {
 
   const handleDownload = async () => {
     if (props.selectedChatId === null) {
-      console.log("Error: no chat selected"); //replace this later with a popup
+      setDownloadStatus("Select a chat before downloading history.");
     } else {
+      setDownloadStatus("Preparing chat history...");
+
       try {
         const response = await fetcher("download-chat-history", {
           method: "POST",
@@ -79,8 +82,25 @@ const ChatbotEdgar = (props) => {
             chat_type: props.chat_type,
           }),
         });
+        const result = await response.text();
+
+        if (result.trim() === "success") {
+          const link = document.createElement("a");
+          link.href = "/downloads/chat-history.csv";
+          link.download = "chat_history.csv";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          setDownloadStatus(
+            "Chat history downloaded and saved to output_document/chat_history.csv."
+          );
+        } else {
+          setDownloadStatus("Could not download chat history.");
+        }
       } catch (e) {
         console.error("Error in fetcher:", e);
+        setDownloadStatus("Could not download chat history.");
       }
     }
   };
@@ -468,6 +488,11 @@ const ChatbotEdgar = (props) => {
                 </div>
               </div>
               <hr />
+              {downloadStatus && (
+                <div className="mt-2 rounded-lg bg-gray-700 px-3 py-2 text-sm text-white">
+                  {downloadStatus}
+                </div>
+              )}
               <div className="flex flex-col mt-4 space-y-2 h-[70vh] overflow-y-scroll relative">
                 {messages.map((msg, index) => (
                   <div

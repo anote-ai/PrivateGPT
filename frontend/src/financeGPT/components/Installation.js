@@ -50,17 +50,31 @@ function Installation({ modelStatus = {}, onModelsReady, refreshModels }) {
   }, [modelStatus.llama2_exists, modelStatus.mistral_exists]);
 
   useEffect(() => {
-    if (!refreshModels) {
-      return;
+    if (!refreshModels || allModelsReady || installingModel) {
+      return undefined;
     }
 
-    refreshModels().then((latestStatus) => {
-      setModels({
-        llama2_exists: Boolean(latestStatus.llama2_exists),
-        mistral_exists: Boolean(latestStatus.mistral_exists),
-      });
-    });
-  }, [refreshModels]);
+    let isCancelled = false;
+
+    const refresh = async () => {
+      const latestStatus = await refreshModels();
+
+      if (!isCancelled) {
+        setModels({
+          llama2_exists: Boolean(latestStatus.llama2_exists),
+          mistral_exists: Boolean(latestStatus.mistral_exists),
+        });
+      }
+    };
+
+    refresh();
+    const intervalId = setInterval(refresh, 3000);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [allModelsReady, installingModel, refreshModels]);
 
   useEffect(() => {
     if (allModelsReady) {

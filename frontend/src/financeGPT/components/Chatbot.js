@@ -22,6 +22,7 @@ const Chatbot = (props) => {
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = React.useState(0);
   const [timeLeft, setTimeLeft] = React.useState('');
+  const [downloadStatus, setDownloadStatus] = useState("");
 
   //initial state
   useEffect(() => {
@@ -71,8 +72,10 @@ const Chatbot = (props) => {
 
   const handleDownload = async () => {
     if (props.selectedChatId === null) {
-      console.log("Error: no chat selected"); //replace this later with a popup
+      setDownloadStatus("Select a chat before downloading history.");
     } else {
+      setDownloadStatus("Preparing chat history...");
+
       try {
         const response = await fetcher("download-chat-history", {
           method: "POST",
@@ -85,9 +88,70 @@ const Chatbot = (props) => {
             chat_type: props.chat_type,
           }),
         });
+        const result = await response.text();
+
+        if (result.trim() === "success") {
+          const link = document.createElement("a");
+          link.href = "/downloads/chat-history.csv";
+          link.download = "chat_history.csv";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          setDownloadStatus(
+            "Chat history downloaded and saved to output_document/chat_history.csv."
+          );
+        } else {
+          setDownloadStatus("Could not download chat history.");
+        }
       } catch (e) {
         console.error("Error in fetcher:", e);
+        setDownloadStatus("Could not download chat history.");
       }
+    }
+  };
+
+  const handleFinetuneExport = async () => {
+    if (props.selectedChatId === null) {
+      setDownloadStatus("Select a chat before exporting fine-tune data.");
+      return;
+    }
+
+    setDownloadStatus("Preparing fine-tune JSONL export...");
+
+    try {
+      const response = await fetcher("download-finetune-history", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          chat_id: props.selectedChatId,
+          chat_type: props.chat_type,
+        }),
+      });
+      const result = await response.text();
+
+      if (result.trim() === "success") {
+        const link = document.createElement("a");
+        link.href = "/downloads/finetune-chat-history.jsonl";
+        link.download = "finetune_chat_history.jsonl";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        setDownloadStatus(
+          "Fine-tune JSONL downloaded and saved to output_document/finetune_chat_history.jsonl."
+        );
+      } else {
+        setDownloadStatus("Could not export fine-tune data.");
+      }
+    } catch (e) {
+      console.error("Error exporting fine-tune data:", e);
+      setDownloadStatus(
+        e.message || "Could not export fine-tune data. Send at least one user message and assistant response first."
+      );
     }
   };
 
@@ -157,8 +221,24 @@ const Chatbot = (props) => {
       handleLoadChat();
       scrollToBottom();
     } catch (e) {
-      console.log("test1")
-      openInstallationModal();
+      const errorMessage = e.message || "Could not get a response from the local model.";
+      const lowerError = errorMessage.toLowerCase();
+
+      setMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg.id === tempMessageId
+            ? { ...msg, message: errorMessage, id: undefined }
+            : msg
+        )
+      );
+
+      if (
+        lowerError.includes("not found") ||
+        lowerError.includes("pull") ||
+        lowerError.includes("missing")
+      ) {
+        openInstallationModal();
+      }
     }
   };
 
@@ -392,15 +472,28 @@ const Chatbot = (props) => {
                 className="reset-icon"
               />
               <div className="text-white font-bold">{props.currChatName}</div>
-              <div className="download-button send-button">
-                <FontAwesomeIcon
-                  icon={faFileDownload}
-                  onClick={handleDownload}
-                  className="file-upload"
-                />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleFinetuneExport}
+                  className="rounded-lg bg-[#3A3B41] px-3 py-1 text-xs text-white hover:bg-gray-700"
+                >
+                  Export Fine-Tune
+                </button>
+                <div className="download-button send-button">
+                  <FontAwesomeIcon
+                    icon={faFileDownload}
+                    onClick={handleDownload}
+                    className="file-upload"
+                  />
+                </div>
               </div>
             </div>
             <hr />
+            {downloadStatus && (
+              <div className="mt-2 rounded-lg bg-gray-700 px-3 py-2 text-sm text-white">
+                {downloadStatus}
+              </div>
+            )}
             <div className="flex flex-col space-y-2 h-[70vh] overflow-y-auto relative">
               {messages.map((msg, index) => (
                 <div

@@ -25,9 +25,19 @@ function fetcher(url, options = {}, retryCount = 0) {
   console.log(updateOptions(options));
 
   return fetch(API_ENDPOINT + "/" + url, updateOptions(options))
-    .then((response) => {
+    .then(async (response) => {
       if (!response.ok) {
-        throw new Error("Network response was not ok");
+        const responseText = await response.text();
+        let errorMessage = responseText || "Network response was not ok";
+
+        try {
+          const errorJson = JSON.parse(responseText);
+          errorMessage = errorJson.error || errorJson.message || errorMessage;
+        } catch (e) {
+          // Keep the plain text error.
+        }
+
+        throw new Error(errorMessage);
       }
       return response;
     })

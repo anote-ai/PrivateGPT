@@ -1,6 +1,9 @@
 backend/dist
 backend/build
 backend/venv
+__pycache__/
+*.pyc
+.pyinstaller/
 frontend/build
 node_modules
 .DS_Store
@@ -11,3 +14,4 @@ backend/database.db
 backend/database/database.db
 
 out/
+output_document/

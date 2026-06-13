@@ -1,4 +1,4 @@
-import React, { Component, useState, useEffect } from "react";
+import React, { useState } from "react";
 import Navbarchatbot from "./NavbarChatbot";
 import Chatbot from "./Chatbot";
 import "../styles/Chatbot.css";
@@ -44,18 +44,6 @@ function HomeChatbot() {
     handleChatSelect(response_data.chat_id);
 
     return response_data.chat_id;
-  };
-
-  const testClick = () => {
-    fetcher("temp-test", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    }).catch((e) => {
-      console.error(e.error);
-    });
   };
 
   return (

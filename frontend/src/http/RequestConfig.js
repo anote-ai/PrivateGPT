@@ -2,11 +2,15 @@ const API_ENDPOINT = "http://127.0.0.1:5000";
 
 export function defaultHeaders() {
   const sessionToken = localStorage.getItem("sessionToken");
-
-  return {
-    Authorization: `Bearer ${sessionToken}`,
-    'Content-Type': 'application/json', // Ensure the Content-Type is set
+  const headers = {
+    'Content-Type': 'application/json',
   };
+
+  if (sessionToken) {
+    headers.Authorization = `Bearer ${sessionToken}`;
+  }
+
+  return headers;
 }
 
 function updateOptions(options) {
@@ -20,11 +24,13 @@ function updateOptions(options) {
   return update;
 }
 
-function fetcher(url, options = {}, retryCount = 0) {
-  console.log("updateOptions(options)");
-  console.log(updateOptions(options));
+function buildUrl(url) {
+  return `${API_ENDPOINT}/${String(url).replace(/^\/+/, "")}`;
+}
 
-  return fetch(API_ENDPOINT + "/" + url, updateOptions(options))
+function fetcher(url, options = {}, retryCount = 0) {
+  void retryCount;
+  return fetch(buildUrl(url), updateOptions(options))
     .then((response) => {
       if (!response.ok) {
         throw new Error("Network response was not ok");
@@ -32,7 +38,6 @@ function fetcher(url, options = {}, retryCount = 0) {
       return response;
     })
     .catch((error) => {
-      console.log("there is an error", error);
       return Promise.reject(error);
     });
 }

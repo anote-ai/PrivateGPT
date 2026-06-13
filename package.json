@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron-forge start",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm --prefix frontend test -- --watchAll=false",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "package_prod": "NODE_ENV=production electron-forge make"

@@ -1,4 +1,4 @@
-import React, { Component, useState, useEffect } from "react";
+import React, { useState } from "react";
 import "../styles/Chatbot.css";
 import fetcher from "../../http/RequestConfig";
 import { useNavigate } from "react-router-dom";
@@ -27,7 +27,7 @@ function Installation() {
           "Content-Type": "application/json",
         },
       });
-      const response_data = await response.json();
+      await response.json();
       setIsLoading(false); // Stop loading after fetch completes
     } catch (e) {
       console.error(e.error);

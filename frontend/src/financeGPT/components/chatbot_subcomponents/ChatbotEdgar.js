@@ -135,7 +135,7 @@ const ChatbotEdgar = (props) => {
       const response = await fetcher("infer-chat-name", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: text.concat(answer), chat_id: props.selectedChatId }),
+        body: JSON.stringify({ messages: text.concat(answer), chat_id: props.selectedChatId, model_type: props.isPrivate }),
       });
       const response_data = await response.json();
       props.setCurrChatName(response_data.chat_name);

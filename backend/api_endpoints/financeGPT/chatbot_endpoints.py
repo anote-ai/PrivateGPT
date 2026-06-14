@@ -1,38 +1,21 @@
 import sqlite3
 import os
 import openai
-import os
-#import ray
 import numpy as np
 from sec_api import QueryApi, RenderApi
 import requests
 import PyPDF2
 import sys
+import concurrent.futures
+from dotenv import load_dotenv
 
-#Todo: hardcode these when deploying
-#sec_api_key=os.environ.get('sec_api_key')
-sec_api_key="105d85762b9138da11aa136b3313112c93888324437c9aff80c3babfa607ac34"
+load_dotenv()
+
+sec_api_key = os.getenv("SEC_API_KEY", "")
 
 
 USER_ID = 1
 
-import os
-
-#PROJECT_ROOT = os.path.dirname(os.path.realpath(__file__))
-#DATABASE = os.path.join(PROJECT_ROOT, 'backend', 'database', 'database.db')
-
-try:
-    import ray._private.memory_monitor
-except ImportError:
-    pass  # Handle the case where the import fails
-
-def get_application_path():
-    if getattr(sys, 'frozen', False):
-        # If the application is bundled with PyInstaller
-        return sys._MEIPASS
-    else:
-        # Normal execution
-        return os.path.dirname(os.path.abspath(__file__))
 
 def dict_factory(cursor, row):
     d = {}
@@ -280,33 +263,41 @@ def add_document_to_db(text, document_name, chat_id):
 
     return doc_id, False
 
-#@ray.remote
+def _embed_chunk(args):
+    """Embed a single chunk — suitable for parallel execution."""
+    start_index, end_index, chunk_text = args
+    embedding = openai.embeddings.create(input=chunk_text, model="text-embedding-ada-002").data[0].embedding
+    vec = np.array(embedding)
+    return {
+        "text": chunk_text,
+        "start_index": start_index,
+        "end_index": end_index,
+        "embedding_vector_blob": vec.tobytes(),
+    }
+
 def chunk_document(text, maxChunkSize, document_id):
-    conn, cursor = get_db_connection()
-
-    chunks = []
+    """Chunk a document and embed all chunks in parallel for faster uploads."""
+    # Build raw chunk list first
+    raw_chunks = []
     startIndex = 0
-    
     while startIndex < len(text):
-        endIndex = startIndex + min(maxChunkSize, len(text))
-        chunkText = text[startIndex:endIndex]
-        chunkText = chunkText.replace("\n", "")
-
-        embeddingVector = openai.embeddings.create(input=chunkText, model="text-embedding-ada-002").data[0].embedding
-        embeddingVector = np.array(embeddingVector)
-        blob = embeddingVector.tobytes()
-        chunks.append({
-            "text": chunkText,
-            "start_index": startIndex,
-            "end_index": endIndex,
-            "embedding_vector": embeddingVector,
-            "embedding_vector_blob": blob,
-        })
+        endIndex = startIndex + min(maxChunkSize, len(text) - startIndex)
+        chunkText = text[startIndex:endIndex].replace("\n", " ").strip()
+        if chunkText:
+            raw_chunks.append((startIndex, endIndex, chunkText))
         startIndex += maxChunkSize
 
-    for chunk in chunks:
-        cursor.execute('INSERT INTO chunks (start_index, end_index, document_id, embedding_vector) VALUES (?,?,?,?)', [chunk["start_index"], chunk["end_index"], document_id, chunk["embedding_vector_blob"]])
+    # Embed all chunks in parallel (up to 8 workers)
+    max_workers = min(8, len(raw_chunks)) if raw_chunks else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        embedded_chunks = list(executor.map(_embed_chunk, raw_chunks))
 
+    # Write all to DB in one transaction
+    conn, cursor = get_db_connection()
+    cursor.executemany(
+        'INSERT INTO chunks (start_index, end_index, document_id, embedding_vector) VALUES (?,?,?,?)',
+        [(c["start_index"], c["end_index"], document_id, c["embedding_vector_blob"]) for c in embedded_chunks]
+    )
     conn.commit()
     conn.close()
 
@@ -581,3 +572,29 @@ def add_ticker_to_chat_db(chat_id, ticker, isUpdate):
     conn.close()
 
     return "Success"
+
+
+def translate_text(text, source_language, target_language, model_key=None):
+    """Translate text using OpenAI (or a local model if no key provided)."""
+    if model_key:
+        client = openai.OpenAI(api_key=model_key)
+    else:
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            return f"[Translation requires an OpenAI API key. Please add one in Settings.]\n\nOriginal text: {text}"
+        client = openai.OpenAI(api_key=api_key)
+
+    source_desc = f"from {source_language}" if source_language and source_language != "Auto-detect" else ""
+    prompt = (
+        f"You are a professional translator. Translate the following text {source_desc} into {target_language}.\n"
+        f"Provide only the translated text with no additional commentary or explanations.\n\n"
+        f"Text to translate:\n{text}"
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=2000,
+    )
+    return response.choices[0].message.content.strip()

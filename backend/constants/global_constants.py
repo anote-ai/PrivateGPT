@@ -1,6 +1,10 @@
 from datetime import timedelta
 from db_enums import PaidUserStatus
 from enum import IntEnum
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 kSessionTokenExpirationTime = timedelta(days=90)
 kPasswordResetExpirationTime = timedelta(minutes=15)
@@ -33,10 +37,7 @@ planToSearches = {
 
 chatgptLimit = 10000
 
-dbName = "privategpt"
-dbHost = "privategpt-db.ctoizzxupont.us-east-1.rds.amazonaws.com"
-dbPassword = "hE38Rp9ah122mG9ifg4D"
-dbUser = "admin"
-
-# TODO: COMMENT OUT WHEN DEPLOY TO PROD
-dbName = "financegpt"
+dbName = os.getenv("DB_NAME", "financegpt")
+dbHost = os.getenv("DB_HOST", "localhost")
+dbPassword = os.getenv("DB_PASSWORD", "")
+dbUser = os.getenv("DB_USER", "admin")

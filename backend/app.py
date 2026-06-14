@@ -17,7 +17,7 @@ from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_
                                                         find_most_recent_chat_from_db, add_document_to_db, chunk_document, update_chat_name_db, delete_chat_from_db, \
                                                         reset_chat_db, change_chat_mode_db, add_message_to_db, get_relevant_chunks, add_sources_to_db, add_model_key_to_db, \
                                                         check_valid_api, reset_uploaded_docs, add_ticker_to_chat_db, download_10K_url_ticker, download_filing_as_pdf, \
-                                                        get_text_from_single_file
+                                                        get_text_from_single_file, translate_text
 
 
 #load_dotenv()
@@ -167,24 +167,6 @@ def run_mistral():
         return jsonify({"success": True, "message": "Mistral run initiated."})
     else:
         return jsonify({"success": False, "message": "Ollama run is already in progress."})
-# @app.route('/install-llama-and-mistral', methods=['POST'])
-# def run_ollama():
-#     try:
-        
-#         # Running the command 'ollama run llama2'
-#         ollama_path = '/usr/local/bin/ollama'
-#         print("running ollama run llama2")
-#         result = subprocess.run([ollama_path, 'run', 'llama2'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-#         print("running ollama run mistral")
-#         result = subprocess.run([ollama_path, 'run', 'mistral'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-#         # Return the standard output if the command was successful
-#         return jsonify({"success": True, "message": "Ollama run successfully.", "output": result.stdout})
-#     except subprocess.CalledProcessError as e:
-#         # Return error message if the command failed
-#         print(f"Ollama command failed with error: {e.stderr}")
-#         print("test1")
-#         return jsonify({"success": False, "message": "Failed to run Ollama.", "error": e.stderr}), 500
-    
 @app.route('/llama-status', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def llama_status():
@@ -194,21 +176,6 @@ def llama_status():
 @cross_origin(origins='*', supports_credentials=True)
 def mistral_status():
     return jsonify(process_status_mistral)
-    
-""" @app.route('/install-mistral', methods=['POST'])
-def run_mistral():
-    try:
-        print("test2")
-        # Running the command 'ollama run llama2'
-        result = subprocess.run(['ollama', 'run', 'mistral'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        # Return the standard output if the command was successful
-        return jsonify({"success": True, "message": "Ollama run successfully.", "output": result.stdout})
-    except subprocess.CalledProcessError as e:
-        # Return error message if the command failed
-        print(f"Ollama command failed with error: {e.stderr}")
-        print("test1")
-        return jsonify({"success": False, "message": "Failed to run Ollama.", "error": e.stderr}), 500 """
 
 @app.route('/download-chat-history', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
@@ -309,22 +276,6 @@ def ingest_metadata():
         
     return jsonify({"uploadUrl": upload_url})
 
-def get_text_from_single_file(file):
-    reader = PyPDF2.PdfReader(file)
-    text = ""
-    for page_num in range(len(reader.pages)):
-        text += reader.pages[page_num].extract_text()
-
-
-    return text
-
-
-@app.route('/ingest-pdf', methods=['POST'])
-def ingest_pdfs():
-
-    chat_id = request.form.getlist('chat_id')[0]
-
-# @app.route('/ingest-files', methods=['POST'])
 @app.route('/ingest-files/<chat_id>/<upload_token>', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def ingest_files(chat_id, upload_token):
@@ -332,46 +283,13 @@ def ingest_files(chat_id, upload_token):
     MAX_CHUNK_SIZE = 1000
 
     for file in files:
-        print("test")
         text = get_text_from_single_file(file)
-        print('text is', text)
-
         filename = file.filename
-
         doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
-
         if not doesExist:
             chunk_document(text, MAX_CHUNK_SIZE, doc_id)
 
     return jsonify({"status": "success"})
-
-# @app.route('/ingest-pdf', methods=['POST'])
-# @cross_origin(origins='*', supports_credentials=True)
-# def ingest_pdfs():
-#     chat_id = request.form.get('chat_id')
-#     chat_type = request.form.get('chat_type')
-
-    
-#     chat_id = request.form.getlist('chat_id')[0]
-
-#     files = request.files.getlist('files[]')
-
-#     MAX_CHUNK_SIZE = 1000
-
-
-#     for file in files:
-#         result = p.from_buffer(file)
-#         text = result["content"].strip()
-
-#         filename = file.filename
-
-#         doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
-
-#         if not doesExist:
-#            chunk_document(text, MAX_CHUNK_SIZE, doc_id)
-
-    
-#     return jsonify({"error": "Invalid JWT"}), 200
 
 @app.route('/retrieve-current-docs', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
@@ -434,33 +352,28 @@ def process_message_pdf():
     sources_str = " ".join([", ".join(str(elem) for elem in source) for source in sources])
     print("sources_str", sources_str)
 
-    if (model_type == 0):
-        #if model_key:
-        #   model_use = model_key
-        #else:
-        #   model_use = "gpt-4"
+    system_prompt = (
+        "You are an expert financial analyst AI assistant. Answer the user's question based on the provided document sources. "
+        "Be thorough, structured, and use markdown formatting (headers, bullet points, tables) where appropriate. "
+        "If the answer cannot be found in the provided sources, clearly state that. "
+        "Cite specific details from the documents to support your answer."
+    )
+    user_prompt = f"Document sources:\n{sources_str}\n\nQuestion: {query}"
 
-        print("using LLama2")
+    if model_type == 0:
         try:
             response = ollama.chat(model='llama2', messages=[
-                {
-                'role': 'user',
-                'content': f'You are a factual chatbot that answers questions about uploaded documents. You only answer with answers you find in the text, no outside information. These are the sources from the text:{sources_str} And this is the question:{query}.',
-                
-                },
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
             ])
             answer = response['message']['content']
         except Exception as e:
             return jsonify({"error": "Error with llama2"}), 500
     else:
-        print("using mistral")
         try:
             response = ollama.chat(model='mistral', messages=[
-                {
-                'role': 'user',
-                'content': f'You are a factual chatbot that answers questions about uploaded documents. You only answer with answers you find in the text, no outside information. These are the sources from the text:{sources_str} And this is the question:{query}.',
-                
-                },
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
             ])
             answer = response['message']['content']
         except Exception as e:
@@ -535,6 +448,51 @@ def process_ticker_info():
 
 
     return jsonify({"error": "Invalid JWT"}), 200
+
+@app.route('/infer-chat-name', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def infer_chat_name():
+    messages = request.json.get('messages', '')
+    chat_id = request.json.get('chat_id')
+
+    try:
+        response = ollama.chat(model='mistral', messages=[
+            {
+                'role': 'user',
+                'content': f'Generate a short 3-5 word chat title for this conversation snippet. Reply with only the title, no punctuation or quotes:\n\n{messages[:500]}'
+            },
+        ])
+        chat_name = response['message']['content'].strip()[:60]
+    except Exception:
+        chat_name = f"Chat {chat_id}"
+
+    update_chat_name_db(chat_id, chat_name)
+    return jsonify(chat_name=chat_name)
+
+
+@app.route('/translate-text', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def translate_text_endpoint():
+    text = request.json.get('text', '')
+    source_language = request.json.get('source_language', 'Auto-detect')
+    target_language = request.json.get('target_language', 'Spanish')
+    model_key = request.json.get('model_key', '')
+
+    if not text.strip():
+        return jsonify({"error": "No text provided"}), 400
+
+    try:
+        translation = translate_text(text, source_language, target_language, model_key or None)
+        return jsonify(translation=translation)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/reset-everything', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def reset_everything():
+    return jsonify({"status": "reset"})
+
 
 if __name__ == '__main__':
     app.run(port=5000)

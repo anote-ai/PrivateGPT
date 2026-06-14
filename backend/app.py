@@ -477,12 +477,20 @@ def translate_text_endpoint():
     source_language = request.json.get('source_language', 'Auto-detect')
     target_language = request.json.get('target_language', 'Spanish')
     model_key = request.json.get('model_key', '')
+    chat_id = request.json.get('chat_id')
 
     if not text.strip():
         return jsonify({"error": "No text provided"}), 400
 
     try:
         translation = translate_text(text, source_language, target_language, model_key or None)
+
+        # Persist to DB if we have a chat_id
+        if chat_id:
+            user_message = f"[Translate to {target_language}] {text}"
+            add_message_to_db(user_message, chat_id, 1)
+            add_message_to_db(translation, chat_id, 0)
+
         return jsonify(translation=translation)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

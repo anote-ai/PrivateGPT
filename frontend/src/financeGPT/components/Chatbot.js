@@ -25,11 +25,21 @@ const Chatbot = (props) => {
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = React.useState(0);
   const [timeLeft, setTimeLeft] = React.useState("");
+  const [installError, setInstallError] = useState("");
+  const installPollTimeoutRef = useRef(null);
   const welcomeMessage = {
     message: "Hello, I am your financial assistant, how can I help you?",
     sentTime: "just now",
     direction: "incoming",
   };
+
+  useEffect(() => {
+    return () => {
+      if (installPollTimeoutRef.current) {
+        clearTimeout(installPollTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Chat history reloads are intentionally driven by chat selection plus explicit refreshes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -134,51 +144,83 @@ const Chatbot = (props) => {
       if (newChat) {
         props.handleChatSelect(newChat);
       }
+      setInstallError("");
       setShowInstallationModal(true);
+    }
+  };
+
+  const resetInstallState = ({ keepModalOpen = false } = {}) => {
+    setIsLoading(false);
+    setProgress(0);
+    setTimeLeft("");
+    if (!keepModalOpen) {
+      setShowInstallationModal(false);
+    }
+    if (installPollTimeoutRef.current) {
+      clearTimeout(installPollTimeoutRef.current);
+      installPollTimeoutRef.current = null;
     }
   };
 
   const pollOllamaStatus = async () => {
     try {
-      const endpoint = props.isPrivate === 0 ? "/llama-status" : "/mistral-status";
-      const response = await fetcher(endpoint, { method: "POST" });
+      const response = await fetcher("local-model-status", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ model_type: props.isPrivate }),
+      });
       const status = await response.json();
 
-      if (status.progress === 100 || (!status.running && status.completed)) {
-        setIsLoading(false);
-        setShowInstallationModal(false);
-        setProgress(0);
-        setTimeLeft("");
+      if (status.error) {
+        setInstallError(status.error);
+        resetInstallState({ keepModalOpen: true });
+        return;
+      }
+
+      if (status.model?.installed || status.progress === 100 || (!status.running && status.completed)) {
+        setInstallError("");
+        resetInstallState();
+        props.refreshLocalModels?.();
       } else {
         setTimeLeft(status.time_left || "Calculating...");
         setProgress(status.progress || 0);
-        setTimeout(pollOllamaStatus, 3000);
+        installPollTimeoutRef.current = setTimeout(pollOllamaStatus, 3000);
       }
     } catch (error) {
       console.error("Failed to fetch install status:", error);
-      setIsLoading(false);
-      setTimeLeft("");
-      setShowInstallationModal(false);
+      setInstallError("Unable to check installation progress. Please verify Ollama is running.");
+      resetInstallState({ keepModalOpen: true });
     }
   };
 
   const installDependencies = async () => {
+    setInstallError("");
+    setProgress(0);
+    setTimeLeft("Preparing download...");
     setIsLoading(true);
-    pollOllamaStatus();
     try {
-      const endpoint = props.isPrivate === 0 ? "/install-llama" : "/install-mistral";
-      const response = await fetcher(endpoint, {
+      const response = await fetcher("install-local-model", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ model_type: props.isPrivate }),
       });
       const responseData = await response.json();
-      if (!responseData.success) {
-        console.error(responseData.message);
-        setIsLoading(false);
+      if (responseData.already_installed) {
+        setInstallError("");
+        resetInstallState();
+        props.refreshLocalModels?.();
+        return;
       }
+      if (!responseData.success) {
+        setInstallError(responseData.message || "Failed to start the local model download.");
+        resetInstallState({ keepModalOpen: true });
+        return;
+      }
+      pollOllamaStatus();
     } catch (error) {
       console.error("Installation failed:", error);
-      setIsLoading(false);
+      setInstallError("Installation failed. Please make sure Ollama is installed, then try again.");
+      resetInstallState({ keepModalOpen: true });
     }
   };
 
@@ -245,14 +287,14 @@ const Chatbot = (props) => {
     }
   };
 
-  const modelName = props.isPrivate === 0 ? "LLaMA 2" : "Mistral";
+  const selectedModelName = props.selectedLocalModel?.label || "Selected Model";
 
   return (
     <>
       <Modal
         isOpen={showInstallationModal}
         onClose={() => setShowInstallationModal(false)}
-        title={isLoading ? "Installing Model..." : `Install ${modelName}`}
+        title={isLoading ? "Installing Model..." : `Install ${selectedModelName}`}
       >
         {isLoading ? (
           <div className="w-full">
@@ -265,8 +307,8 @@ const Chatbot = (props) => {
             <p className="text-sm text-gray-400">{timeLeft || "Downloading..."}</p>
           </div>
         ) : (
-          <p className="text-gray-300 mb-4">
-            You have not installed {modelName}. Please install it to use local inference.
+          <p className={`mb-4 ${installError ? "text-red-400" : "text-gray-300"}`}>
+            {installError || `You have not installed ${selectedModelName}. Please install it to use local inference.`}
           </p>
         )}
         <button
@@ -278,7 +320,7 @@ const Chatbot = (props) => {
               : "bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] text-white hover:opacity-90"
           }`}
         >
-          {isLoading ? "Installing..." : `Download ${modelName}`}
+          {isLoading ? "Installing..." : `Download ${selectedModelName}`}
         </button>
       </Modal>
 

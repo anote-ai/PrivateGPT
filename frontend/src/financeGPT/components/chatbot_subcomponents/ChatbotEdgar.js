@@ -25,6 +25,12 @@ const ChatbotEdgar = (props) => {
   const [isValidTicker, setIsValidTicker] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [showInstallationModal, setShowInstallationModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [timeLeft, setTimeLeft] = useState("");
+  const [installError, setInstallError] = useState("");
+  const installPollTimeoutRef = useRef(null);
 
   const welcomeMessage = (ticker) =>
     ticker
@@ -47,6 +53,14 @@ const ChatbotEdgar = (props) => {
     handleLoadChat();
     setIsFirstMessageSent(false);
   }, [props.selectedChatId, props.forceUpdate]);
+
+  useEffect(() => {
+    return () => {
+      if (installPollTimeoutRef.current) {
+        clearTimeout(installPollTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -137,6 +151,83 @@ const ChatbotEdgar = (props) => {
       if (newChat) {
         props.handleChatSelect(newChat);
       }
+      setInstallError("");
+      setShowInstallationModal(true);
+    }
+  };
+
+  const resetInstallState = ({ keepModalOpen = false } = {}) => {
+    setIsLoading(false);
+    setProgress(0);
+    setTimeLeft("");
+    if (!keepModalOpen) {
+      setShowInstallationModal(false);
+    }
+    if (installPollTimeoutRef.current) {
+      clearTimeout(installPollTimeoutRef.current);
+      installPollTimeoutRef.current = null;
+    }
+  };
+
+  const pollOllamaStatus = async () => {
+    try {
+      const response = await fetcher("local-model-status", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ model_type: props.isPrivate }),
+      });
+      const status = await response.json();
+
+      if (status.error) {
+        setInstallError(status.error);
+        resetInstallState({ keepModalOpen: true });
+        return;
+      }
+
+      if (status.model?.installed || status.progress === 100 || (!status.running && status.completed)) {
+        setInstallError("");
+        resetInstallState();
+        props.refreshLocalModels?.();
+      } else {
+        setTimeLeft(status.time_left || "Calculating...");
+        setProgress(status.progress || 0);
+        installPollTimeoutRef.current = setTimeout(pollOllamaStatus, 3000);
+      }
+    } catch (error) {
+      console.error("Failed to fetch install status:", error);
+      setInstallError("Unable to check installation progress. Please verify Ollama is running.");
+      resetInstallState({ keepModalOpen: true });
+    }
+  };
+
+  const installDependencies = async () => {
+    setInstallError("");
+    setProgress(0);
+    setTimeLeft("Preparing download...");
+    setIsLoading(true);
+    try {
+      const response = await fetcher("install-local-model", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ model_type: props.isPrivate }),
+      });
+      const responseData = await response.json();
+      if (responseData.already_installed) {
+        setInstallError("");
+        resetInstallState();
+        props.refreshLocalModels?.();
+        return;
+      }
+      if (!responseData.success) {
+        setInstallError(responseData.message || "Failed to start the local model download.");
+        resetInstallState({ keepModalOpen: true });
+        return;
+      }
+      pollOllamaStatus();
+    } catch (error) {
+      console.error("Installation failed:", error);
+      setInstallError("Installation failed. Please make sure Ollama is installed, then try again.");
+      resetInstallState({ keepModalOpen: true });
     }
   };
 
@@ -258,6 +349,8 @@ const ChatbotEdgar = (props) => {
     }
   };
 
+  const selectedModelName = props.selectedLocalModel?.label || "Selected Model";
+
   const handleTextareaInput = (e) => {
     e.target.style.height = "auto";
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
@@ -272,6 +365,39 @@ const ChatbotEdgar = (props) => {
 
   return (
     <div>
+      <Modal
+        isOpen={showInstallationModal}
+        onClose={() => setShowInstallationModal(false)}
+        title={isLoading ? "Installing Model..." : `Install ${selectedModelName}`}
+      >
+        {isLoading ? (
+          <div className="w-full">
+            <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden mb-2">
+              <div
+                className="h-3 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%`, background: "linear-gradient(90deg, #2E5C82, #50B7C3)" }}
+              />
+            </div>
+            <p className="text-sm text-gray-400">{timeLeft || "Downloading..."}</p>
+          </div>
+        ) : (
+          <p className={`mb-4 ${installError ? "text-red-400" : "text-gray-300"}`}>
+            {installError || `You have not installed ${selectedModelName}. Please install it to use local inference.`}
+          </p>
+        )}
+        <button
+          onClick={installDependencies}
+          disabled={isLoading}
+          className={`mt-4 w-full py-2 rounded-lg font-semibold transition-colors ${
+            isLoading
+              ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+              : "bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] text-white hover:opacity-90"
+          }`}
+        >
+          {isLoading ? "Installing..." : `Download ${selectedModelName}`}
+        </button>
+      </Modal>
+
       {/* Edit ticker confirmation */}
       <Modal
         isOpen={showEditModal}

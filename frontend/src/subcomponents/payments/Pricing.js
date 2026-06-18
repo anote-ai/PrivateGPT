@@ -48,7 +48,7 @@ const Pricing = (props) => {
         price: "$1,000",
         month: true,
         features: [
-          "Privacy-preserving LLM using a more powerful model like LLAMA2",
+          "Privacy-preserving LLM using a more powerful modern open local model",
           "Support for larger file upload sizes to handle more data",
           "Supported Text File Formats: All text file types (e.g., PDFs, TXT files, DOCX files, etc.)",
           "Maximum Number of Files: Up to 50 files per session",

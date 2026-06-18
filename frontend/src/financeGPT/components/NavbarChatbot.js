@@ -60,9 +60,9 @@ function NavbarChatbot(props) {
   };
 
   const handleModelChange = (value) => {
-    const nextModelType = value === "llama2" ? 0 : 1;
+    const nextModelType = Number(value);
 
-    if (nextModelType === props.isPrivate) {
+    if (Number.isNaN(nextModelType) || nextModelType === props.isPrivate) {
       return;
     }
 
@@ -248,10 +248,13 @@ function NavbarChatbot(props) {
               <select
                 className="bg-[#1E2030] rounded-lg border border-gray-700 focus:ring-0 focus:border-[#50B7C3] text-white text-sm cursor-pointer px-2 py-1.5"
                 onChange={(e) => handleModelChange(e.target.value)}
-                value={props.isPrivate === 0 ? "llama2" : "mistral"}
+                value={String(props.isPrivate)}
               >
-                <option value="llama2">LLaMA 2</option>
-                <option value="mistral">Mistral</option>
+                {props.localModels.map((model) => (
+                  <option key={model.id} value={String(model.id)}>
+                    {model.label}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

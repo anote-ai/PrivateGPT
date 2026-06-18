@@ -7,6 +7,46 @@ import fetcher from "../../http/RequestConfig";
 import ChatbotEdgar from "./chatbot_subcomponents/ChatbotEdgar";
 import ChatbotTranslation from "./chatbot_subcomponents/ChatbotTranslation";
 
+const FALLBACK_LOCAL_MODELS = [
+  {
+    id: 0,
+    key: "qwen3_8b",
+    tag: "qwen3:8b",
+    label: "Qwen 3 8B",
+    description: "Recommended default for local document Q&A.",
+    installed: false,
+  },
+  {
+    id: 1,
+    key: "llama3_1_8b",
+    tag: "llama3.1:8b",
+    label: "Llama 3.1 8B",
+    description: "Strong general-purpose local model with broad ecosystem support.",
+    installed: false,
+  },
+];
+
+async function requestLocalModels() {
+  try {
+    const response = await fetcher("local-models", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const responseData = await response.json();
+    return {
+      models: responseData.models?.length ? responseData.models : FALLBACK_LOCAL_MODELS,
+      defaultModelType: responseData.default_model_type ?? 0,
+    };
+  } catch (error) {
+    console.error("Error loading local models:", error);
+    return {
+      models: FALLBACK_LOCAL_MODELS,
+      defaultModelType: 0,
+    };
+  }
+}
+
 function HomeChatbot() {
   const [selectedChatId, setSelectedChatId] = useState(null);
   const [forceUpdate, setForceUpdate] = useState(0);
@@ -19,6 +59,7 @@ function HomeChatbot() {
   const [activeMessageIndex, setActiveMessageIndex] = useState(null);
   const [relevantChunk, setRelevantChunk] = useState("");
   const [confirmedModelKey, setConfirmedModelKey] = useState("");
+  const [localModels, setLocalModels] = useState(FALLBACK_LOCAL_MODELS);
 
   const activateChat = (chatSummary) => {
     if (!chatSummary) {
@@ -49,29 +90,55 @@ function HomeChatbot() {
     setForceUpdate((prev) => prev + 1);
   };
 
+  const refreshLocalModels = async () => {
+    const localModelState = await requestLocalModels();
+    setLocalModels(localModelState.models);
+    return localModelState;
+  };
+
   useEffect(() => {
-    const loadMostRecentChat = async () => {
-      try {
-        const response = await fetcher("retrieve-all-chats", {
+    let isMounted = true;
+
+    const loadInitialState = async () => {
+      const [localModelState, chats] = await Promise.all([
+        requestLocalModels(),
+        fetcher("retrieve-all-chats", {
           method: "POST",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({}),
-        });
-        const responseData = await response.json();
-        const chats = responseData.chat_info || [];
+        })
+          .then((response) => response.json())
+          .then((responseData) => responseData.chat_info || [])
+          .catch((error) => {
+            console.error("Error loading most recent chat:", error);
+            return [];
+          }),
+      ]);
 
-        if (chats.length === 0) {
-          return;
-        }
+      if (!isMounted) {
+        return;
+      }
 
+      setLocalModels(localModelState.models);
+
+      if (chats.length > 0) {
         const mostRecentChat = [...chats].sort((a, b) => b.id - a.id)[0];
         activateChat(mostRecentChat);
-      } catch (error) {
-        console.error("Error loading most recent chat:", error);
+        return;
       }
+
+      setIsPrivate((currentModelType) =>
+        localModelState.models.some((model) => model.id === currentModelType)
+          ? currentModelType
+          : localModelState.defaultModelType
+      );
     };
 
-    loadMostRecentChat();
+    loadInitialState();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const createNewChat = async (
@@ -106,6 +173,12 @@ function HomeChatbot() {
     }
   };
 
+  const selectedLocalModel =
+    localModels.find((model) => model.id === isPrivate) ||
+    FALLBACK_LOCAL_MODELS.find((model) => model.id === isPrivate) ||
+    localModels[0] ||
+    FALLBACK_LOCAL_MODELS[0];
+
   const sharedChatbotProps = {
     selectedChatId,
     handleChatSelect: activateChat,
@@ -119,6 +192,9 @@ function HomeChatbot() {
     setActiveMessageIndex,
     setRelevantChunk,
     createNewChat,
+    localModels,
+    selectedLocalModel,
+    refreshLocalModels,
   };
 
   return (
@@ -142,6 +218,9 @@ function HomeChatbot() {
           createNewChat={createNewChat}
           handleChatSelect={activateChat}
           forceUpdate={forceUpdate}
+          localModels={localModels}
+          selectedLocalModel={selectedLocalModel}
+          refreshLocalModels={refreshLocalModels}
         />
       </div>
 
@@ -172,6 +251,7 @@ function HomeChatbot() {
             createNewChat={createNewChat}
             handleChatSelect={activateChat}
             isPrivate={isPrivate}
+            selectedLocalModel={selectedLocalModel}
           />
         )}
       </div>

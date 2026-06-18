@@ -11,6 +11,7 @@ import threading
 import re
 import PyPDF2
 import uuid
+import shutil
 
 
 from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_chats_from_db, retrieve_message_from_db, retrieve_docs_from_db, delete_doc_from_db, \
@@ -18,6 +19,7 @@ from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_
                                                         reset_chat_db, change_chat_mode_db, add_message_to_db, get_relevant_chunks, add_sources_to_db, add_model_key_to_db, \
                                                         check_valid_api, reset_uploaded_docs, add_ticker_to_chat_db, download_10K_url_ticker, download_filing_as_pdf, \
                                                         get_text_from_single_file, translate_text
+from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fallback_chat_models, get_local_chat_models, resolve_chat_model
 
 
 #load_dotenv()
@@ -34,8 +36,46 @@ config = {
 
 CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True)
 
-process_status_llama = {"running": False, "output": "", "error": ""}
-process_status_mistral = {"running": False, "output": "", "error": ""}
+
+def create_process_status():
+    return {"running": False, "output": "", "error": "", "completed": False, "progress": 0, "time_left": ""}
+
+
+process_status_by_model = {
+    model["id"]: create_process_status()
+    for model in get_local_chat_models()
+}
+
+
+def get_ollama_manifest_path(model_tag):
+    base_path = os.path.expanduser('~/.ollama/models/manifests/registry.ollama.ai/library')
+    model_name, variant = (model_tag.split(':', 1) + [None])[:2]
+    model_dir = os.path.join(base_path, model_name)
+    if variant is None:
+        return model_dir
+    return os.path.join(model_dir, variant)
+
+
+def is_model_installed(model_tag):
+    model_path = get_ollama_manifest_path(model_tag)
+    model_dir = os.path.dirname(model_path)
+    return os.path.exists(model_path) or os.path.isdir(model_dir)
+
+
+def serialize_model(model):
+    return {
+        **model,
+        "installed": is_model_installed(model["tag"]),
+    }
+
+
+def get_model_status(model_type):
+    model = resolve_chat_model(model_type)
+    return process_status_by_model[model["id"]]
+
+
+def get_ollama_binary():
+    return os.getenv("OLLAMA_PATH") or shutil.which("ollama") or '/usr/local/bin/ollama'
 
 @app.before_request
 def before_request():
@@ -66,116 +106,145 @@ def test_flask():
     return jsonify(test=test)
 
 #INSTALLATION
+@app.route('/local-models', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def local_models():
+    models = [serialize_model(model) for model in get_local_chat_models()]
+    return jsonify({
+        "models": models,
+        "default_model_type": DEFAULT_CHAT_MODEL_TYPE,
+        "embedding_model": LOCAL_EMBEDDING_MODEL,
+    })
+
+
 @app.route('/check-models', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def check_models():
-    base_path = os.path.expanduser('~/.ollama/models/manifests/registry.ollama.ai/library')
-    llama2_exists = os.path.isdir(os.path.join(base_path, 'llama2'))
-    mistral_exists = os.path.isdir(os.path.join(base_path, 'mistral'))
-    print("llama and mistral", llama2_exists, mistral_exists)
-    return jsonify({'llama2_exists': llama2_exists, 'mistral_exists': mistral_exists})
+    models = [serialize_model(model) for model in get_local_chat_models()]
+    return jsonify({
+        "models": models,
+        "default_model_type": DEFAULT_CHAT_MODEL_TYPE,
+        "embedding_model": LOCAL_EMBEDDING_MODEL,
+        # Legacy keys retained for backwards compatibility with older tests/UI.
+        "llama2_exists": models[0]["installed"] if len(models) > 0 else False,
+        "mistral_exists": models[1]["installed"] if len(models) > 1 else False,
+    })
 
-def run_llama_async():
-    ollama_path = '/usr/local/bin/ollama'
-    # For Windows
-    # ollama_path = os.path.join(os.getenv('LOCALAPPDATA'), 'Programs', 'Ollama', 'ollama.exe')
-    command = [ollama_path, 'run', 'llama2']
-    
+
+def run_model_pull_async(model):
+    ollama_path = get_ollama_binary()
+    command = [ollama_path, 'pull', model["tag"]]
+    process_status = process_status_by_model[model["id"]]
+
     # Regular expression to match the time left message format
     time_left_regex = re.compile(r'\b\d+m\d+s\b')
     progress_regex = re.compile(r'(\d+)%')
 
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        # Monitor the process output in real-time
-        for line in iter(process.stderr.readline, ''):
-            print(line, end='')  # Debug: print each line to server log
-            match = time_left_regex.search(line)
-            if match:
-                process_status_llama["time_left"] = match.group()
-                
-            match_progress = progress_regex.search(line)
-            if match_progress:
-                process_status_llama["progress"] = int(match_progress.group(1))
-        
-        process.wait()  # Wait for the process to complete
-        process_status_llama["running"] = False
-        process_status_llama["completed"] = True
-        process_status_llama["progress"] = 100
-        print("process complete")
-    except Exception as e:
-        process_status_llama["running"] = False
-        process_status_llama["completed"] = True
-        process_status_llama["error"] = str(e)
-        
-def run_mistral_async():
-    ollama_path = '/usr/local/bin/ollama'
-    # For Windows
-    # ollama_path = os.path.join(os.getenv('LOCALAPPDATA'), 'Programs', 'Ollama', 'ollama.exe')
-    command = [ollama_path, 'run', 'mistral']
-    
-    # Regular expression to match the time left message format
-    time_left_regex = re.compile(r'\b\d+m\d+s\b')
-    progress_regex = re.compile(r'(\d+)%')
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        output_lines = []
 
-    try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        # For Windows
-        # process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
-        
         # Monitor the process output in real-time
-        for line in iter(process.stderr.readline, ''):
+        for line in iter(process.stdout.readline, ''):
             print(line, end='')  # Debug: print each line to server log
+            output_lines.append(line.strip())
+            process_status["output"] = "\n".join(output_lines[-20:])
             match = time_left_regex.search(line)
             if match:
-                process_status_mistral["time_left"] = match.group()
-                
+                process_status["time_left"] = match.group()
+
             match_progress = progress_regex.search(line)
             if match_progress:
-                process_status_mistral["progress"] = int(match_progress.group(1))
-        
-        process.wait()  # Wait for the process to complete
-        print("process complete")
-        process_status_mistral["running"] = False
-        process_status_mistral["completed"] = True
-        process_status_mistral["progress"] = 100
+                process_status["progress"] = int(match_progress.group(1))
+
+        return_code = process.wait()  # Wait for the process to complete
+        process_status["running"] = False
+        process_status["completed"] = True
+        process_status["time_left"] = ""
+
+        if return_code == 0:
+            process_status["error"] = ""
+            process_status["progress"] = 100
+            print("process complete")
+        else:
+            process_status["error"] = process_status["output"] or f"Ollama exited with status {return_code}."
     except Exception as e:
-        process_status_mistral["running"] = False
-        process_status_mistral["completed"] = True
-        process_status_mistral["error"] = str(e)
-        
+        process_status["running"] = False
+        process_status["completed"] = True
+        process_status["time_left"] = ""
+        process_status["error"] = str(e)
+
+
+def start_model_install(model_type):
+    model = resolve_chat_model(model_type)
+    process_status = process_status_by_model[model["id"]]
+    serialized_model = serialize_model(model)
+
+    if process_status["running"]:
+        return jsonify({"success": False, "message": f"{model['label']} is already downloading."})
+
+    if serialized_model["installed"]:
+        process_status.update(create_process_status())
+        process_status["completed"] = True
+        process_status["progress"] = 100
+        return jsonify({
+            "success": True,
+            "already_installed": True,
+            "message": f"{model['label']} is already installed.",
+            "model": serialized_model,
+        })
+
+    process_status.update(create_process_status())
+    process_status["running"] = True
+    threading.Thread(target=run_model_pull_async, args=(model,), daemon=True).start()
+    return jsonify({"success": True, "message": f"{model['label']} pull initiated.", "model": serialized_model})
+
+
+def get_model_status_response(model_type):
+    model = resolve_chat_model(model_type)
+    return jsonify({**process_status_by_model[model["id"]], "model": serialize_model(model)})
 
 @app.route('/install-llama', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def run_llama():
-    if not process_status_llama["running"]:
-        process_status_llama["running"] = True
-        process_status_llama["completed"] = False
-        threading.Thread(target=run_llama_async, daemon=True).start()
-        return jsonify({"success": True, "message": "Ollama run initiated."})
-    else:
-        return jsonify({"success": False, "message": "Ollama run is already in progress."})
-        
+    return start_model_install(0)
+
 @app.route('/install-mistral', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def run_mistral():
-    if not process_status_mistral["running"]:
-        process_status_mistral["running"] = True
-        process_status_mistral["completed"] = False
-        threading.Thread(target=run_mistral_async, daemon=True).start()
-        return jsonify({"success": True, "message": "Mistral run initiated."})
-    else:
-        return jsonify({"success": False, "message": "Ollama run is already in progress."})
+    return start_model_install(1)
+
+
+@app.route('/install-local-model', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def install_local_model():
+    payload = request.get_json(silent=True) or {}
+    model_type = payload.get('model_type', DEFAULT_CHAT_MODEL_TYPE)
+    return start_model_install(model_type)
+
+
 @app.route('/llama-status', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def llama_status():
-    return jsonify(process_status_llama)
+    return get_model_status_response(0)
 
 @app.route('/mistral-status', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def mistral_status():
-    return jsonify(process_status_mistral)
+    return get_model_status_response(1)
+
+
+@app.route('/local-model-status', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=True)
+def local_model_status():
+    payload = request.get_json(silent=True) or {}
+    model_type = payload.get('model_type', DEFAULT_CHAT_MODEL_TYPE)
+    return get_model_status_response(model_type)
 
 @app.route('/download-chat-history', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
@@ -376,24 +445,16 @@ def process_message_pdf():
             answer = response.choices[0].message.content.strip()
         except Exception as e:
             return jsonify({"error": f"OpenAI API error: {str(e)}"}), 500
-    elif model_type == 0:
-        try:
-            response = ollama.chat(model='llama2', messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt},
-            ])
-            answer = response['message']['content']
-        except Exception as e:
-            return jsonify({"error": "Error with llama2"}), 500
     else:
+        local_model = resolve_chat_model(model_type)
         try:
-            response = ollama.chat(model='mistral', messages=[
+            response = ollama.chat(model=local_model["tag"], messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_prompt},
             ])
             answer = response['message']['content']
         except Exception as e:
-            return jsonify({"error": "Error with Mistral"}), 500
+            return jsonify({"error": f"Error with {local_model['label']}"}), 500
 
     #This adds bot message
     message_id = add_message_to_db(answer, chat_id, 0)
@@ -470,15 +531,15 @@ def process_ticker_info():
 def infer_chat_name():
     messages = request.json.get('messages', '')
     chat_id = request.json.get('chat_id')
-    model_type = request.json.get('model_type', 1)  # 0=llama2, 1=mistral
+    model_type = request.json.get('model_type', DEFAULT_CHAT_MODEL_TYPE)
 
     prompt_msg = [{
         'role': 'user',
         'content': f'Generate a short 3-5 word chat title for this conversation snippet. Reply with only the title, no punctuation or quotes:\n\n{messages[:500]}'
     }]
 
-    # Try preferred model first, then the other, then word-truncation fallback
-    models_to_try = ['mistral', 'llama2'] if model_type == 1 else ['llama2', 'mistral']
+    # Try preferred model first, then the remaining local models, then word-truncation fallback
+    models_to_try = [model["tag"] for model in get_fallback_chat_models(model_type)]
     chat_name = None
 
     for model in models_to_try:

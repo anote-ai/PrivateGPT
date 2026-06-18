@@ -20,12 +20,13 @@ function Installation() {
   const installDependencies = async () => {
     setIsLoading(true);
     try {
-      const response = await fetcher("install-llama-and-mistral", {
+      const response = await fetcher("install-local-model", {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
+        body: JSON.stringify({ model_type: 0 }),
       });
       await response.json();
       setIsLoading(false); // Stop loading after fetch completes
@@ -54,7 +55,7 @@ function Installation() {
             <div>Before using PrivateGPT, there are a few installation steps</div>
             <p>Click <a className="underline" target="_blank" rel="noopener noreferrer" href={"https://github.com/ollama/ollama"}>here</a> to download Ollama</p>
             <p>Once downloaded:</p>
-            <div className="w-52 hover:bg-gray-500 cursor-pointer bg-gray-700 p-2 rounded-lg mb-5" onClick={installDependencies}>Install llama2 and Mistral</div>
+            <div className="w-64 hover:bg-gray-500 cursor-pointer bg-gray-700 p-2 rounded-lg mb-5" onClick={installDependencies}>Install the recommended local model</div>
           </div>
           <button onClick={goToHomeChatbot} className="text-xl bg-gray-800 hover:bg-gray-600 w-auto rounded-xl m-2 px-5 py-3 absolute bottom-10 right-10 mb-4 mr-4">
             Continue

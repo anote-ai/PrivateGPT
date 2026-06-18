@@ -2,12 +2,13 @@ import sqlite3
 import os
 import openai
 import numpy as np
+import ollama
 from sec_api import QueryApi, RenderApi
 import requests
 import PyPDF2
 import sys
-import concurrent.futures
 from dotenv import load_dotenv
+from local_models import LOCAL_EMBEDDING_MODEL, normalize_model_type
 
 load_dotenv()
 
@@ -39,8 +40,9 @@ def get_db_connection():
 # Chat_type is an integer where 0=chatbot, 1=Edgar, 2=PDFUploader, etc
 def add_chat_to_db(chat_type, model_type): #intake the current userID and the model type into the chat table
     conn, cursor = get_db_connection()
+    normalized_model_type = normalize_model_type(model_type)
 
-    cursor.execute('INSERT INTO chats (user_id, model_type, associated_task) VALUES (?, ?, ?)', (USER_ID, model_type, chat_type))
+    cursor.execute('INSERT INTO chats (user_id, model_type, associated_task) VALUES (?, ?, ?)', (USER_ID, normalized_model_type, chat_type))
     chat_id = cursor.lastrowid
 
     name = f"Chat {chat_id}"
@@ -225,6 +227,7 @@ def find_most_recent_chat_from_db():
 
 def change_chat_mode_db(chat_mode_to_change_to, chat_id):
     conn, cursor = get_db_connection()
+    normalized_model_type = normalize_model_type(chat_mode_to_change_to)
 
     query = """
     UPDATE chats
@@ -233,7 +236,7 @@ def change_chat_mode_db(chat_mode_to_change_to, chat_id):
     """
 
     # Execute the query
-    cursor.execute(query, (chat_mode_to_change_to, chat_id, USER_ID))
+    cursor.execute(query, (normalized_model_type, chat_id, USER_ID))
 
     conn.commit()
     conn.close()
@@ -261,21 +264,53 @@ def add_document_to_db(text, document_name, chat_id):
 
     return doc_id, False
 
-def _embed_chunk(args):
-    """Embed a single chunk — suitable for parallel execution."""
-    start_index, end_index, chunk_text = args
-    embedding = openai.embeddings.create(input=chunk_text, model="text-embedding-ada-002").data[0].embedding
-    vec = np.array(embedding)
-    return {
-        "text": chunk_text,
-        "start_index": start_index,
-        "end_index": end_index,
-        "embedding_vector_blob": vec.tobytes(),
-    }
+def _extract_embedding_list(response):
+    if isinstance(response, dict):
+        if "embeddings" in response:
+            return response["embeddings"]
+        if "embedding" in response:
+            return [response["embedding"]]
+
+    embeddings = getattr(response, "embeddings", None)
+    if embeddings is not None:
+        return embeddings
+
+    embedding = getattr(response, "embedding", None)
+    if embedding is not None:
+        return [embedding]
+
+    return []
+
+
+def generate_local_embeddings(inputs):
+    if not inputs:
+        return []
+
+    if hasattr(ollama, "embed"):
+        response = ollama.embed(model=LOCAL_EMBEDDING_MODEL, input=inputs)
+        vectors = [np.array(vector, dtype=np.float32) for vector in _extract_embedding_list(response)]
+        if len(vectors) != len(inputs):
+            raise RuntimeError(
+                f"Expected {len(inputs)} embeddings from {LOCAL_EMBEDDING_MODEL}, received {len(vectors)}."
+            )
+        return vectors
+
+    vectors = []
+    for item in inputs:
+        response = ollama.embeddings(model=LOCAL_EMBEDDING_MODEL, prompt=item)
+        extracted = _extract_embedding_list(response)
+        if extracted:
+            vectors.append(np.array(extracted[0], dtype=np.float32))
+
+    if len(vectors) != len(inputs):
+        raise RuntimeError(
+            f"Expected {len(inputs)} embeddings from {LOCAL_EMBEDDING_MODEL}, received {len(vectors)}."
+        )
+
+    return vectors
 
 def chunk_document(text, maxChunkSize, document_id):
-    """Chunk a document and embed all chunks in parallel for faster uploads."""
-    # Build raw chunk list first
+    """Chunk a document and embed all chunks locally with Ollama."""
     raw_chunks = []
     startIndex = 0
     while startIndex < len(text):
@@ -285,12 +320,25 @@ def chunk_document(text, maxChunkSize, document_id):
             raw_chunks.append((startIndex, endIndex, chunkText))
         startIndex += maxChunkSize
 
-    # Embed all chunks in parallel (up to 8 workers)
-    max_workers = min(8, len(raw_chunks)) if raw_chunks else 1
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        embedded_chunks = list(executor.map(_embed_chunk, raw_chunks))
+    if not raw_chunks:
+        return
 
-    # Write all to DB in one transaction
+    embedded_vectors = generate_local_embeddings([chunk[2] for chunk in raw_chunks])
+    if len(embedded_vectors) != len(raw_chunks):
+        raise RuntimeError(
+            f"Expected {len(raw_chunks)} chunk embeddings from {LOCAL_EMBEDDING_MODEL}, received {len(embedded_vectors)}."
+        )
+
+    embedded_chunks = []
+    for (start_index, end_index, _chunk_text), vector in zip(raw_chunks, embedded_vectors):
+        embedded_chunks.append(
+            {
+                "start_index": start_index,
+                "end_index": end_index,
+                "embedding_vector_blob": vector.tobytes(),
+            }
+        )
+
     conn, cursor = get_db_connection()
     cursor.executemany(
         'INSERT INTO chunks (start_index, end_index, document_id, embedding_vector) VALUES (?,?,?,?)',
@@ -347,8 +395,11 @@ def get_relevant_chunks(k, question, chat_id):
 
     embeddings = np.array(embeddings)
 
-    embeddingVector = openai.embeddings.create(input=question, model="text-embedding-ada-002").data[0].embedding
-    embeddingVector = np.array(embeddingVector)
+    query_vectors = generate_local_embeddings([question])
+    if not query_vectors:
+        return []
+
+    embeddingVector = query_vectors[0]
 
     res = knn(embeddingVector, embeddings)
     num_results = min(k, len(res))

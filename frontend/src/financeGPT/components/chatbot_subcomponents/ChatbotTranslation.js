@@ -3,7 +3,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPaperPlane,
   faLanguage,
-  faRobot,
   faUser,
   faCopy,
   faCheck,
@@ -37,6 +36,11 @@ const LANGUAGES = [
   { code: "Ukrainian", label: "Ukrainian" },
 ];
 
+const WELCOME_MESSAGE = {
+  message: "Hello! I'm your AI translation assistant. Type text below and choose target languages to translate.",
+  direction: "incoming",
+};
+
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
@@ -59,13 +63,40 @@ const ChatbotTranslation = (props) => {
   const [sourceText, setSourceText] = useState("");
   const [targetLang, setTargetLang] = useState("Spanish");
   const [sourceLang, setSourceLang] = useState("English");
-  const [messages, setMessages] = useState([
-    {
-      message: "Hello! I'm your AI translation assistant. Type text below and choose target languages to translate.",
-      direction: "incoming",
-    },
-  ]);
+  const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const messagesEndRef = useRef(null);
+
+  React.useEffect(() => {
+    const loadTranslationHistory = async () => {
+      setMessages([WELCOME_MESSAGE]);
+
+      if (props.selectedChatId === null || props.selectedChatId === undefined) {
+        return;
+      }
+
+      try {
+        const response = await fetcher("retrieve-messages-from-chat", {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: props.selectedChatId,
+            chat_type: 2,
+          }),
+        });
+        const data = await response.json();
+        const transformedMessages = data.messages.map((item) => ({
+          message: item.message_text,
+          direction: item.sent_from_user === 1 ? "outgoing" : "incoming",
+          translatedText: item.sent_from_user === 0 ? item.message_text : undefined,
+        }));
+        setMessages([WELCOME_MESSAGE, ...transformedMessages]);
+      } catch (error) {
+        console.error("Error loading translation history:", error);
+      }
+    };
+
+    loadTranslationHistory();
+  }, [props.selectedChatId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -73,6 +104,18 @@ const ChatbotTranslation = (props) => {
 
   const handleTranslate = async () => {
     if (!sourceText.trim()) return;
+
+    let chatId = props.selectedChatId;
+    let newChat = null;
+
+    if (chatId === null || chatId === undefined) {
+      newChat = await props.createNewChat(2, props.isPrivate, false);
+      chatId = newChat?.id;
+    }
+
+    if (chatId === null || chatId === undefined) {
+      return;
+    }
 
     const tempId = Date.now();
     setMessages((prev) => [
@@ -91,7 +134,7 @@ const ChatbotTranslation = (props) => {
           text: sourceText,
           source_language: sourceLang,
           target_language: targetLang,
-          chat_id: props.selectedChatId,
+          chat_id: chatId,
           model_key: props.confirmedModelKey,
         }),
       });
@@ -105,6 +148,11 @@ const ChatbotTranslation = (props) => {
             : msg
         )
       );
+
+      if (newChat) {
+        props.handleChatSelect(newChat);
+      }
+
       scrollToBottom();
     } catch (e) {
       setMessages((prev) =>
@@ -114,6 +162,9 @@ const ChatbotTranslation = (props) => {
             : msg
         )
       );
+      if (newChat) {
+        props.handleChatSelect(newChat);
+      }
     }
   };
 

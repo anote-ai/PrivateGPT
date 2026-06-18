@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Navbarchatbot from "./NavbarChatbot";
 import Chatbot from "./Chatbot";
 import "../styles/Chatbot.css";
@@ -20,32 +20,95 @@ function HomeChatbot() {
   const [relevantChunk, setRelevantChunk] = useState("");
   const [confirmedModelKey, setConfirmedModelKey] = useState("");
 
-  const handleChatSelect = (chatId) => {
-    setSelectedChatId(chatId);
+  const activateChat = (chatSummary) => {
+    if (!chatSummary) {
+      setSelectedChatId(null);
+      setCurrChatName("");
+      setTicker("");
+      setShowChatbot(false);
+      setIsEdit(0);
+      setConfirmedModelKey("");
+      setActiveMessageIndex(null);
+      setRelevantChunk("");
+      return;
+    }
+
+    setSelectedChatId(chatSummary.id);
+    setIsPrivate(chatSummary.model_type ?? 0);
+    setCurrChatName(chatSummary.chat_name || `Chat ${chatSummary.id}`);
+    setcurrTask(chatSummary.associated_task ?? 0);
+    setTicker(chatSummary.ticker || "");
+    setShowChatbot(chatSummary.associated_task === 1 && Boolean(chatSummary.ticker));
+    setIsEdit(0);
+    setConfirmedModelKey(chatSummary.custom_model_key || "");
+    setActiveMessageIndex(null);
+    setRelevantChunk("");
   };
 
   const handleForceUpdate = () => {
     setForceUpdate((prev) => prev + 1);
   };
 
-  const createNewChat = async () => {
+  useEffect(() => {
+    const loadMostRecentChat = async () => {
+      try {
+        const response = await fetcher("retrieve-all-chats", {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const responseData = await response.json();
+        const chats = responseData.chat_info || [];
+
+        if (chats.length === 0) {
+          return;
+        }
+
+        const mostRecentChat = [...chats].sort((a, b) => b.id - a.id)[0];
+        activateChat(mostRecentChat);
+      } catch (error) {
+        console.error("Error loading most recent chat:", error);
+      }
+    };
+
+    loadMostRecentChat();
+  }, []);
+
+  const createNewChat = async (
+    taskOverride = currTask,
+    modelOverride = isPrivate,
+    activateSelection = true
+  ) => {
     try {
       const response = await fetcher("create-new-chat", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_type: currTask, model_type: isPrivate }),
+        body: JSON.stringify({ chat_type: taskOverride, model_type: modelOverride }),
       });
-      const response_data = await response.json();
-      handleChatSelect(response_data.chat_id);
-      return response_data.chat_id;
+      const responseData = await response.json();
+      const chatSummary = {
+        id: responseData.chat_id,
+        chat_name: `Chat ${responseData.chat_id}`,
+        associated_task: taskOverride,
+        model_type: modelOverride,
+        ticker: "",
+        custom_model_key: "",
+      };
+
+      if (activateSelection) {
+        activateChat(chatSummary);
+      }
+
+      return chatSummary;
     } catch (e) {
       console.error("Error creating new chat:", e);
+      return null;
     }
   };
 
   const sharedChatbotProps = {
     selectedChatId,
-    handleChatSelect,
+    handleChatSelect: activateChat,
     handleForceUpdate,
     forceUpdate,
     isPrivate,
@@ -64,7 +127,7 @@ function HomeChatbot() {
       <div className="w-[20%] px-2">
         <Navbarchatbot
           selectedChatId={selectedChatId}
-          onChatSelect={handleChatSelect}
+          onChatSelect={activateChat}
           handleForceUpdate={handleForceUpdate}
           isPrivate={isPrivate}
           setIsPrivate={setIsPrivate}
@@ -77,7 +140,7 @@ function HomeChatbot() {
           setIsEdit={setIsEdit}
           setShowChatbot={setShowChatbot}
           createNewChat={createNewChat}
-          handleChatSelect={handleChatSelect}
+          handleChatSelect={activateChat}
           forceUpdate={forceUpdate}
         />
       </div>
@@ -106,6 +169,9 @@ function HomeChatbot() {
           <ChatbotTranslation
             selectedChatId={selectedChatId}
             confirmedModelKey={confirmedModelKey}
+            createNewChat={createNewChat}
+            handleChatSelect={activateChat}
+            isPrivate={isPrivate}
           />
         )}
       </div>
@@ -117,7 +183,7 @@ function HomeChatbot() {
             selectedChatId={selectedChatId}
             chat_type={currTask}
             createNewChat={createNewChat}
-            onChatSelect={handleChatSelect}
+            onChatSelect={activateChat}
             handleForceUpdate={handleForceUpdate}
             forceUpdate={forceUpdate}
             setIsPrivate={setIsPrivate}

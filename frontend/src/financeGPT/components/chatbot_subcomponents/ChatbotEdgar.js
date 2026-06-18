@@ -31,6 +31,8 @@ const ChatbotEdgar = (props) => {
       ? `Hello! I can answer questions about **${ticker}** based on their 10-K filing. How can I help you?`
       : "Hello, I am your financial assistant. Enter a stock ticker above to get started.";
 
+  // The initial mount should render the current chat state once without re-running on each helper redefinition.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     handleLoadChat();
     setIsFirstMessageSent(false);
@@ -39,6 +41,8 @@ const ChatbotEdgar = (props) => {
     ]);
   }, []);
 
+  // EDGAR chat reloads are tied to chat selection changes plus explicit refreshes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     handleLoadChat();
     setIsFirstMessageSent(false);
@@ -68,15 +72,15 @@ const ChatbotEdgar = (props) => {
   const handleTryMessage = (text, chat_id, isPrivate) => {
     if (!text.trim()) return;
     if (chat_id === null || chat_id === undefined) {
-      props.createNewChat().then((newChatId) => {
-        if (newChatId) handleSendMessage(text, newChatId, isPrivate);
+      props.createNewChat(props.chat_type, isPrivate, false).then((newChat) => {
+        if (newChat?.id) handleSendMessage(text, newChat.id, newChat);
       });
     } else {
-      handleSendMessage(text, chat_id, isPrivate);
+      handleSendMessage(text, chat_id);
     }
   };
 
-  const handleSendMessage = async (text, chat_id) => {
+  const handleSendMessage = async (text, chat_id, newChat = null) => {
     if (inputRef.current) {
       inputRef.current.value = "";
       inputRef.current.style.height = "auto";
@@ -112,11 +116,14 @@ const ChatbotEdgar = (props) => {
         )
       );
 
+      if (newChat) {
+        props.handleChatSelect(newChat);
+      }
       handleLoadChat();
       scrollToBottom();
 
       if (!isFirstMessageSent) {
-        inferChatName(text, answer);
+        inferChatName(text, answer, chat_id);
         setIsFirstMessageSent(true);
       }
     } catch (e) {
@@ -127,15 +134,18 @@ const ChatbotEdgar = (props) => {
             : msg
         )
       );
+      if (newChat) {
+        props.handleChatSelect(newChat);
+      }
     }
   };
 
-  const inferChatName = async (text, answer) => {
+  const inferChatName = async (text, answer, chatId = props.selectedChatId) => {
     try {
       const response = await fetcher("infer-chat-name", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: text.concat(answer), chat_id: props.selectedChatId, model_type: props.isPrivate }),
+        body: JSON.stringify({ messages: text.concat(answer), chat_id: chatId, model_type: props.isPrivate }),
       });
       const response_data = await response.json();
       props.setCurrChatName(response_data.chat_name);
@@ -146,14 +156,18 @@ const ChatbotEdgar = (props) => {
   };
 
   const handleLoadChat = async () => {
+    setMessages([{ message: welcomeMessage(props.ticker), sentTime: "just now", direction: "incoming" }]);
+
+    if (props.selectedChatId === null || props.selectedChatId === undefined) {
+      return;
+    }
+
     try {
       const response = await fetcher("retrieve-messages-from-chat", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: props.selectedChatId, chat_type: props.chat_type }),
       });
-
-      setMessages([{ message: welcomeMessage(props.ticker), sentTime: "just now", direction: "incoming" }]);
 
       const response_data = await response.json();
       const transformedMessages = response_data.messages.map((item) => ({
@@ -162,7 +176,10 @@ const ChatbotEdgar = (props) => {
         relevant_chunks: item.relevant_chunks,
       }));
 
-      setMessages((prev) => [...prev, ...transformedMessages]);
+      setMessages([
+        { message: welcomeMessage(props.ticker), sentTime: "just now", direction: "incoming" },
+        ...transformedMessages,
+      ]);
       setIsFirstMessageSent(transformedMessages.length > 1);
     } catch (error) {
       console.error("Error loading chat messages:", error);

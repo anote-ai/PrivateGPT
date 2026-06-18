@@ -12,6 +12,8 @@ function ChatHistory(props) {
   const [chatIdToRename, setChatIdToRename] = useState(null);
   const [newChatName, setNewChatName] = useState("");
 
+  // This list refreshes only when the selected chat changes or callers force a reload.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     retrieveAllChats();
   }, [props.selectedChatId, props.forceUpdate]);
@@ -24,7 +26,6 @@ function ChatHistory(props) {
   const confirmDeleteChat = () => {
     deleteChat(chatToDelete);
     setShowConfirmPopupChat(false);
-    props.onChatSelect(null);
   };
 
   const handleRenameChat = (chat_id) => {
@@ -46,7 +47,7 @@ function ChatHistory(props) {
         body: JSON.stringify({ chat_type: props.chat_type }),
       });
       const response_data = await response.json();
-      setChats(response_data.chat_info);
+      setChats(response_data.chat_info || []);
     } catch (error) {
       console.error("Error fetching chats:", error);
     }
@@ -62,14 +63,22 @@ function ChatHistory(props) {
       if (response.ok) {
         props.handleForceUpdate();
         try {
-          const recentRes = await fetcher("find-most-recent-chat", {
+          const chatsRes = await fetcher("retrieve-all-chats", {
             method: "POST",
             headers: { Accept: "application/json", "Content-Type": "application/json" },
             body: JSON.stringify({}),
           });
-          const recentData = await recentRes.json();
-          props.handleChatSelect(recentData.chat_info.id);
-          props.setCurrChatName(recentData.chat_info.chat_name);
+          const chatsData = await chatsRes.json();
+          const updatedChats = chatsData.chat_info || [];
+          setChats(updatedChats);
+
+          if (updatedChats.length === 0) {
+            props.onChatSelect(null);
+            return;
+          }
+
+          const mostRecentChat = [...updatedChats].sort((a, b) => b.id - a.id)[0];
+          props.onChatSelect(mostRecentChat);
         } catch (e) {
           console.error("Error finding recent chat after deletion", e);
         }
@@ -80,12 +89,21 @@ function ChatHistory(props) {
   };
 
   const renameChat = async (chat_id, new_name) => {
+    const trimmedName = new_name.trim();
+
+    if (!trimmedName) {
+      return;
+    }
+
     try {
       await fetcher("update-chat-name", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id, chat_name: new_name }),
+        body: JSON.stringify({ chat_id, chat_name: trimmedName }),
       });
+      if (chat_id === props.selectedChatId) {
+        props.setCurrChatName(trimmedName);
+      }
       retrieveAllChats();
     } catch (e) {
       console.error("Error renaming chat:", e);
@@ -161,15 +179,8 @@ function ChatHistory(props) {
           onClick={() => {
             props
               .createNewChat()
-              .then((newChatId) => {
-                const chat_name = "Chat " + newChatId;
-                props.setIsPrivate(0);
-                props.setCurrChatName(chat_name);
-                props.setTicker("");
-                props.setShowChatbot(false);
-                props.onChatSelect(newChatId);
+              .then(() => {
                 props.handleForceUpdate();
-                props.setConfirmedModelKey("");
               })
               .catch((error) => console.error("Error creating new chat:", error));
           }}
@@ -187,15 +198,7 @@ function ChatHistory(props) {
           <div
             key={chat.id}
             onClick={() => {
-              props.onChatSelect(chat.id);
-              props.setIsPrivate(chat.model_type);
-              props.setTicker(chat.ticker);
-              if (chat.ticker) {
-                props.setIsEdit(0);
-                props.setShowChatbot(true);
-              }
-              props.setcurrTask(chat.associated_task);
-              props.setCurrChatName(chat.chat_name);
+              props.onChatSelect(chat);
             }}
             className={`flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer transition-colors group ${
               props.selectedChatId === chat.id

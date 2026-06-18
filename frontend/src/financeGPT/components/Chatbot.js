@@ -25,19 +25,14 @@ const Chatbot = (props) => {
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = React.useState(0);
   const [timeLeft, setTimeLeft] = React.useState("");
+  const welcomeMessage = {
+    message: "Hello, I am your financial assistant, how can I help you?",
+    sentTime: "just now",
+    direction: "incoming",
+  };
 
-  useEffect(() => {
-    loadLatestChat();
-    handleLoadChat();
-    setMessages([
-      {
-        message: "Hello, I am your financial assistant, how can I help you?",
-        sentTime: "just now",
-        direction: "incoming",
-      },
-    ]);
-  }, []);
-
+  // Chat history reloads are intentionally driven by chat selection plus explicit refreshes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     handleLoadChat();
   }, [props.selectedChatId, props.forceUpdate]);
@@ -47,24 +42,6 @@ const Chatbot = (props) => {
       behavior: "smooth",
       block: "end",
     });
-  };
-
-  const loadLatestChat = async () => {
-    try {
-      const response = await fetcher("find-most-recent-chat", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      });
-      const response_data = await response.json();
-      props.handleChatSelect(response_data.chat_info.id);
-      props.setCurrChatName(response_data.chat_info.chat_name);
-    } catch (e) {
-      console.error("Error loading latest chat", e);
-    }
   };
 
   const handleDownload = async () => {
@@ -95,15 +72,15 @@ const Chatbot = (props) => {
   const handleTryMessage = (text, chat_id, isPrivate) => {
     if (!text.trim()) return;
     if (chat_id === null || chat_id === undefined) {
-      props.createNewChat().then((newChatId) => {
-        if (newChatId) handleSendMessage(text, newChatId, isPrivate);
+      props.createNewChat(props.chat_type, isPrivate, false).then((newChat) => {
+        if (newChat?.id) handleSendMessage(text, newChat.id, newChat);
       });
     } else {
-      handleSendMessage(text, chat_id, isPrivate);
+      handleSendMessage(text, chat_id);
     }
   };
 
-  const handleSendMessage = async (text, chat_id) => {
+  const handleSendMessage = async (text, chat_id, newChat = null) => {
     if (inputRef.current) {
       inputRef.current.value = "";
       inputRef.current.style.height = "auto";
@@ -141,6 +118,9 @@ const Chatbot = (props) => {
             : msg
         )
       );
+      if (newChat) {
+        props.handleChatSelect(newChat);
+      }
       handleLoadChat();
       scrollToBottom();
     } catch (e) {
@@ -151,6 +131,9 @@ const Chatbot = (props) => {
             : msg
         )
       );
+      if (newChat) {
+        props.handleChatSelect(newChat);
+      }
       setShowInstallationModal(true);
     }
   };
@@ -200,6 +183,12 @@ const Chatbot = (props) => {
   };
 
   const handleLoadChat = async () => {
+    setMessages([welcomeMessage]);
+
+    if (props.selectedChatId === null || props.selectedChatId === undefined) {
+      return;
+    }
+
     try {
       const response = await fetcher("retrieve-messages-from-chat", {
         method: "POST",
@@ -213,39 +202,35 @@ const Chatbot = (props) => {
         }),
       });
 
-      setMessages([
-        {
-          message: "Hello, I am your financial assistant, how can I help you?",
-          sentTime: "just now",
-          direction: "incoming",
-        },
-      ]);
-
       const response_data = await response.json();
       const transformedMessages = response_data.messages.map((item) => ({
         message: item.message_text,
         direction: item.sent_from_user === 1 ? "outgoing" : "incoming",
         relevant_chunks: item.relevant_chunks,
       }));
-      setMessages((prev) => [...prev, ...transformedMessages]);
+      setMessages([welcomeMessage, ...transformedMessages]);
     } catch (error) {
       console.error("Error loading chat messages:", error);
     }
   };
 
   const handleReset = async () => {
+    if (props.selectedChatId === null || props.selectedChatId === undefined) {
+      setMessages([welcomeMessage]);
+      return;
+    }
+
     try {
-      await fetcher("reset-everything", { method: "POST" });
+      await fetcher("reset-chat", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: props.selectedChatId }),
+      });
+      props.handleForceUpdate();
     } catch (e) {
       console.error("Failed to reset:", e);
     }
-    setMessages([
-      {
-        message: "Hello, I am your financial assistant, how can I help you?",
-        sentTime: "just now",
-        direction: "incoming",
-      },
-    ]);
+    setMessages([welcomeMessage]);
   };
 
   const handleTextareaInput = (e) => {

@@ -11,6 +11,8 @@ function SidebarChatbot(props) {
   const [docToDeleteName, setDocToDeleteName] = useState(null);
   const [docToDeleteId, setDocToDeleteId] = useState(null);
 
+  // Documents are refreshed from the active chat context and explicit refresh triggers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     retrieveDocs();
   }, [props.selectedChatId, props.forceUpdate]);

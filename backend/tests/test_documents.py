@@ -153,7 +153,7 @@ class TestProcessMessagePdf:
             "model_key": model_key,
         }
 
-    def test_llama2_response(self, client):
+    def test_primary_local_model_response(self, client):
         mock_ollama_resp = {"message": {"content": "Revenue was $5B."}}
         with patch(
             "api_endpoints.financeGPT.chatbot_endpoints.get_relevant_chunks",
@@ -163,12 +163,13 @@ class TestProcessMessagePdf:
             return_value=1,
         ), patch(
             "api_endpoints.financeGPT.chatbot_endpoints.add_sources_to_db"
-        ), patch("ollama.chat", return_value=mock_ollama_resp):
+        ), patch("ollama.chat", return_value=mock_ollama_resp) as mock_chat:
             resp = _post(client, "/process-message-pdf", self._payload(model_type=0))
         assert resp.status_code == 200
         assert resp.get_json()["answer"] == "Revenue was $5B."
+        assert mock_chat.call_args.kwargs["model"] == "qwen3:8b"
 
-    def test_mistral_response(self, client):
+    def test_secondary_local_model_response(self, client):
         mock_ollama_resp = {"message": {"content": "Net income was $1.2B."}}
         with patch(
             "api_endpoints.financeGPT.chatbot_endpoints.get_relevant_chunks",
@@ -178,12 +179,13 @@ class TestProcessMessagePdf:
             return_value=2,
         ), patch(
             "api_endpoints.financeGPT.chatbot_endpoints.add_sources_to_db"
-        ), patch("ollama.chat", return_value=mock_ollama_resp):
+        ), patch("ollama.chat", return_value=mock_ollama_resp) as mock_chat:
             resp = _post(client, "/process-message-pdf", self._payload(model_type=1))
         assert resp.status_code == 200
         assert "1.2B" in resp.get_json()["answer"]
+        assert mock_chat.call_args.kwargs["model"] == "llama3.1:8b"
 
-    def test_llama2_failure_returns_500(self, client):
+    def test_local_model_failure_returns_500(self, client):
         with patch(
             "api_endpoints.financeGPT.chatbot_endpoints.get_relevant_chunks",
             return_value=[],
@@ -193,3 +195,4 @@ class TestProcessMessagePdf:
         ), patch("ollama.chat", side_effect=Exception("model not found")):
             resp = _post(client, "/process-message-pdf", self._payload(model_type=0))
         assert resp.status_code == 500
+        assert "Qwen 3 8B" in resp.get_json()["error"]

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Navbarchatbot from "./NavbarChatbot";
 import Chatbot from "./Chatbot";
 import "../styles/Chatbot.css";
@@ -6,6 +6,46 @@ import SidebarChatbot from "./SidebarChatbot";
 import fetcher from "../../http/RequestConfig";
 import ChatbotEdgar from "./chatbot_subcomponents/ChatbotEdgar";
 import ChatbotTranslation from "./chatbot_subcomponents/ChatbotTranslation";
+
+const FALLBACK_LOCAL_MODELS = [
+  {
+    id: 0,
+    key: "qwen3_8b",
+    tag: "qwen3:8b",
+    label: "Qwen 3 8B",
+    description: "Recommended default for local document Q&A.",
+    installed: false,
+  },
+  {
+    id: 1,
+    key: "llama3_1_8b",
+    tag: "llama3.1:8b",
+    label: "Llama 3.1 8B",
+    description: "Strong general-purpose local model with broad ecosystem support.",
+    installed: false,
+  },
+];
+
+async function requestLocalModels() {
+  try {
+    const response = await fetcher("local-models", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const responseData = await response.json();
+    return {
+      models: responseData.models?.length ? responseData.models : FALLBACK_LOCAL_MODELS,
+      defaultModelType: responseData.default_model_type ?? 0,
+    };
+  } catch (error) {
+    console.error("Error loading local models:", error);
+    return {
+      models: FALLBACK_LOCAL_MODELS,
+      defaultModelType: 0,
+    };
+  }
+}
 
 function HomeChatbot() {
   const [selectedChatId, setSelectedChatId] = useState(null);
@@ -19,33 +59,129 @@ function HomeChatbot() {
   const [activeMessageIndex, setActiveMessageIndex] = useState(null);
   const [relevantChunk, setRelevantChunk] = useState("");
   const [confirmedModelKey, setConfirmedModelKey] = useState("");
+  const [localModels, setLocalModels] = useState(FALLBACK_LOCAL_MODELS);
 
-  const handleChatSelect = (chatId) => {
-    setSelectedChatId(chatId);
+  const activateChat = (chatSummary) => {
+    if (!chatSummary) {
+      setSelectedChatId(null);
+      setCurrChatName("");
+      setTicker("");
+      setShowChatbot(false);
+      setIsEdit(0);
+      setConfirmedModelKey("");
+      setActiveMessageIndex(null);
+      setRelevantChunk("");
+      return;
+    }
+
+    setSelectedChatId(chatSummary.id);
+    setIsPrivate(chatSummary.model_type ?? 0);
+    setCurrChatName(chatSummary.chat_name || `Chat ${chatSummary.id}`);
+    setcurrTask(chatSummary.associated_task ?? 0);
+    setTicker(chatSummary.ticker || "");
+    setShowChatbot(chatSummary.associated_task === 1 && Boolean(chatSummary.ticker));
+    setIsEdit(0);
+    setConfirmedModelKey(chatSummary.custom_model_key || "");
+    setActiveMessageIndex(null);
+    setRelevantChunk("");
   };
 
   const handleForceUpdate = () => {
     setForceUpdate((prev) => prev + 1);
   };
 
-  const createNewChat = async () => {
+  const refreshLocalModels = async () => {
+    const localModelState = await requestLocalModels();
+    setLocalModels(localModelState.models);
+    return localModelState;
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadInitialState = async () => {
+      const [localModelState, chats] = await Promise.all([
+        requestLocalModels(),
+        fetcher("retrieve-all-chats", {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        })
+          .then((response) => response.json())
+          .then((responseData) => responseData.chat_info || [])
+          .catch((error) => {
+            console.error("Error loading most recent chat:", error);
+            return [];
+          }),
+      ]);
+
+      if (!isMounted) {
+        return;
+      }
+
+      setLocalModels(localModelState.models);
+
+      if (chats.length > 0) {
+        const mostRecentChat = [...chats].sort((a, b) => b.id - a.id)[0];
+        activateChat(mostRecentChat);
+        return;
+      }
+
+      setIsPrivate((currentModelType) =>
+        localModelState.models.some((model) => model.id === currentModelType)
+          ? currentModelType
+          : localModelState.defaultModelType
+      );
+    };
+
+    loadInitialState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const createNewChat = async (
+    taskOverride = currTask,
+    modelOverride = isPrivate,
+    activateSelection = true
+  ) => {
     try {
       const response = await fetcher("create-new-chat", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_type: currTask, model_type: isPrivate }),
+        body: JSON.stringify({ chat_type: taskOverride, model_type: modelOverride }),
       });
-      const response_data = await response.json();
-      handleChatSelect(response_data.chat_id);
-      return response_data.chat_id;
+      const responseData = await response.json();
+      const chatSummary = {
+        id: responseData.chat_id,
+        chat_name: `Chat ${responseData.chat_id}`,
+        associated_task: taskOverride,
+        model_type: modelOverride,
+        ticker: "",
+        custom_model_key: "",
+      };
+
+      if (activateSelection) {
+        activateChat(chatSummary);
+      }
+
+      return chatSummary;
     } catch (e) {
       console.error("Error creating new chat:", e);
+      return null;
     }
   };
 
+  const selectedLocalModel =
+    localModels.find((model) => model.id === isPrivate) ||
+    FALLBACK_LOCAL_MODELS.find((model) => model.id === isPrivate) ||
+    localModels[0] ||
+    FALLBACK_LOCAL_MODELS[0];
+
   const sharedChatbotProps = {
     selectedChatId,
-    handleChatSelect,
+    handleChatSelect: activateChat,
     handleForceUpdate,
     forceUpdate,
     isPrivate,
@@ -56,6 +192,9 @@ function HomeChatbot() {
     setActiveMessageIndex,
     setRelevantChunk,
     createNewChat,
+    localModels,
+    selectedLocalModel,
+    refreshLocalModels,
   };
 
   return (
@@ -64,7 +203,7 @@ function HomeChatbot() {
       <div className="w-[20%] px-2">
         <Navbarchatbot
           selectedChatId={selectedChatId}
-          onChatSelect={handleChatSelect}
+          onChatSelect={activateChat}
           handleForceUpdate={handleForceUpdate}
           isPrivate={isPrivate}
           setIsPrivate={setIsPrivate}
@@ -77,8 +216,11 @@ function HomeChatbot() {
           setIsEdit={setIsEdit}
           setShowChatbot={setShowChatbot}
           createNewChat={createNewChat}
-          handleChatSelect={handleChatSelect}
+          handleChatSelect={activateChat}
           forceUpdate={forceUpdate}
+          localModels={localModels}
+          selectedLocalModel={selectedLocalModel}
+          refreshLocalModels={refreshLocalModels}
         />
       </div>
 
@@ -106,6 +248,10 @@ function HomeChatbot() {
           <ChatbotTranslation
             selectedChatId={selectedChatId}
             confirmedModelKey={confirmedModelKey}
+            createNewChat={createNewChat}
+            handleChatSelect={activateChat}
+            isPrivate={isPrivate}
+            selectedLocalModel={selectedLocalModel}
           />
         )}
       </div>
@@ -117,7 +263,7 @@ function HomeChatbot() {
             selectedChatId={selectedChatId}
             chat_type={currTask}
             createNewChat={createNewChat}
-            onChatSelect={handleChatSelect}
+            onChatSelect={activateChat}
             handleForceUpdate={handleForceUpdate}
             forceUpdate={forceUpdate}
             setIsPrivate={setIsPrivate}

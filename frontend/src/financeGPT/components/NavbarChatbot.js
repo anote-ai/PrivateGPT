@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import fetcher from "../../http/RequestConfig";
 import ChatHistory from "./ChatHistory";
 import Modal from "../../components/Modal";
@@ -13,20 +13,11 @@ const TASK_TYPES = [
 
 function NavbarChatbot(props) {
   const [showConfirmPopup, setShowConfirmPopup] = useState(false);
-  const [showConfirmModelKey, setShowConfirmModelKey] = useState(false);
   const [showErrorKeyMessage, setShowErrorKeyMessage] = useState(false);
   const [showConfirmResetKey, setShowConfirmResetKey] = useState(false);
+  const [showConfirmModelSwitch, setShowConfirmModelSwitch] = useState(false);
   const [pendingTask, setPendingTask] = useState(null);
-  const [modelKey, setModelKey] = useState("");
-
-  useEffect(() => {
-    props.handleForceUpdate();
-  }, [props.isPrivate]);
-
-  useEffect(() => {
-    setModelKey(props.confirmedModelKey);
-    props.handleForceUpdate();
-  }, [props.confirmedModelKey]);
+  const [pendingModelType, setPendingModelType] = useState(null);
 
   const handleTaskChange = (taskId) => {
     if (taskId !== props.currTask) {
@@ -35,18 +26,12 @@ function NavbarChatbot(props) {
     }
   };
 
-  const confirmSwitchChange = () => {
-    props.setcurrTask(pendingTask);
-    changeChatMode(props.isPrivate);
+  const confirmSwitchChange = async () => {
+    if (pendingTask === null) return;
+
+    await props.createNewChat(pendingTask, props.isPrivate);
     setShowConfirmPopup(false);
     setPendingTask(null);
-  };
-
-  const confirmModelKey = () => {
-    resetChat();
-    props.setConfirmedModelKey(modelKey);
-    addModelKeyToDb(modelKey);
-    setShowConfirmModelKey(false);
   };
 
   const confirmResetModel = () => {
@@ -74,6 +59,37 @@ function NavbarChatbot(props) {
     props.handleForceUpdate();
   };
 
+  const handleModelChange = (value) => {
+    const nextModelType = Number(value);
+
+    if (Number.isNaN(nextModelType) || nextModelType === props.isPrivate) {
+      return;
+    }
+
+    if (props.selectedChatId === null) {
+      props.setIsPrivate(nextModelType);
+      return;
+    }
+
+    setPendingModelType(nextModelType);
+    setShowConfirmModelSwitch(true);
+  };
+
+  const confirmModelSwitch = async () => {
+    if (pendingModelType === null) return;
+
+    try {
+      await changeChatMode(pendingModelType);
+      props.setIsPrivate(pendingModelType);
+      props.handleForceUpdate();
+    } catch (e) {
+      console.error("Error switching model:", e);
+    } finally {
+      setPendingModelType(null);
+      setShowConfirmModelSwitch(false);
+    }
+  };
+
   const changeChatMode = async (isPrivate) => {
     try {
       await fetcher("change-chat-mode", {
@@ -92,20 +108,44 @@ function NavbarChatbot(props) {
       <Modal
         isOpen={showConfirmPopup}
         onClose={() => setShowConfirmPopup(false)}
-        title="Switch Mode?"
+        title="Switch Task?"
       >
         <p className="text-gray-300 mb-4">
-          Switching modes will reset your current chat. Are you sure?
+          Switching tasks will start a new chat so your current conversation stays intact.
         </p>
         <div className="flex space-x-3">
           <button
             onClick={confirmSwitchChange}
             className="flex-1 py-2 bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] text-white rounded-lg font-semibold hover:opacity-90"
           >
-            Yes, switch
+            Start new chat
           </button>
           <button
             onClick={() => setShowConfirmPopup(false)}
+            className="flex-1 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
+          >
+            Cancel
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showConfirmModelSwitch}
+        onClose={() => setShowConfirmModelSwitch(false)}
+        title="Switch Local Model?"
+      >
+        <p className="text-gray-300 mb-4">
+          Changing the local model will reset the current chat history but keep the attached documents and ticker.
+        </p>
+        <div className="flex space-x-3">
+          <button
+            onClick={confirmModelSwitch}
+            className="flex-1 py-2 bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] text-white rounded-lg font-semibold hover:opacity-90"
+          >
+            Switch model
+          </button>
+          <button
+            onClick={() => setShowConfirmModelSwitch(false)}
             className="flex-1 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
           >
             Cancel
@@ -207,11 +247,14 @@ function NavbarChatbot(props) {
               <span className="text-gray-300 text-sm font-medium">Local Model</span>
               <select
                 className="bg-[#1E2030] rounded-lg border border-gray-700 focus:ring-0 focus:border-[#50B7C3] text-white text-sm cursor-pointer px-2 py-1.5"
-                onChange={() => setShowConfirmPopup(true)}
-                value={props.isPrivate === 0 ? "llama2" : "mistral"}
+                onChange={(e) => handleModelChange(e.target.value)}
+                value={String(props.isPrivate)}
               >
-                <option value="llama2">LLaMA 2</option>
-                <option value="mistral">Mistral</option>
+                {props.localModels.map((model) => (
+                  <option key={model.id} value={String(model.id)}>
+                    {model.label}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

@@ -1,6 +1,9 @@
 """
 Tests for model management endpoints:
   POST /check-models
+  POST /local-models
+  POST /install-local-model
+  POST /local-model-status
   POST /install-llama
   POST /install-mistral
   POST /llama-status
@@ -21,13 +24,28 @@ def _post(client, url, payload=None):
     )
 
 
+@pytest.fixture(autouse=True)
+def reset_model_install_state():
+    from app import create_process_status, process_status_by_model
+
+    for model_id in list(process_status_by_model.keys()):
+        process_status_by_model[model_id].clear()
+        process_status_by_model[model_id].update(create_process_status())
+
+    yield
+
+    for model_id in list(process_status_by_model.keys()):
+        process_status_by_model[model_id].clear()
+        process_status_by_model[model_id].update(create_process_status())
+
+
 # ---------------------------------------------------------------------------
 # /check-models
 # ---------------------------------------------------------------------------
 
 class TestCheckModels:
     def test_both_models_present(self, client):
-        with patch("os.path.isdir", return_value=True):
+        with patch("app.is_model_installed", return_value=True):
             resp = _post(client, "/check-models")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -35,12 +53,25 @@ class TestCheckModels:
         assert data["mistral_exists"] is True
 
     def test_no_models_installed(self, client):
-        with patch("os.path.isdir", return_value=False):
+        with patch("app.is_model_installed", return_value=False):
             resp = _post(client, "/check-models")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["llama2_exists"] is False
         assert data["mistral_exists"] is False
+
+
+class TestLocalModels:
+    def test_returns_local_model_registry(self, client):
+        with patch("app.is_model_installed", return_value=False):
+            resp = _post(client, "/local-models")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["default_model_type"] == 0
+        assert len(data["models"]) >= 2
+        assert data["models"][0]["tag"] == "qwen3:8b"
+        assert data["models"][1]["tag"] == "llama3.1:8b"
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +80,7 @@ class TestCheckModels:
 
 class TestInstallLlama:
     def test_install_initiates_successfully(self, client):
-        with patch("threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread:
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-llama")
         assert resp.status_code == 200
@@ -57,7 +88,7 @@ class TestInstallLlama:
         assert data.get("success") is True
 
     def test_install_returns_json(self, client):
-        with patch("threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread:
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-llama")
         assert resp.content_type == "application/json"
@@ -69,11 +100,32 @@ class TestInstallLlama:
 
 class TestInstallMistral:
     def test_install_initiates_successfully(self, client):
-        with patch("threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread:
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-mistral")
         assert resp.status_code == 200
         assert resp.get_json().get("success") is True
+
+
+class TestInstallLocalModel:
+    def test_install_selected_model(self, client):
+        with patch("app.threading.Thread") as mock_thread:
+            mock_thread.return_value.start = MagicMock()
+            resp = _post(client, "/install-local-model", {"model_type": 1})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["model"]["tag"] == "llama3.1:8b"
+
+    def test_install_reports_already_installed(self, client):
+        with patch("app.is_model_installed", return_value=True):
+            resp = _post(client, "/install-local-model", {"model_type": 0})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["already_installed"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +156,15 @@ class TestMistralStatus:
         resp = _post(client, "/mistral-status")
         assert resp.status_code == 200
         assert "running" in resp.get_json()
+
+
+class TestLocalModelStatus:
+    def test_status_for_selected_model(self, client):
+        resp = _post(client, "/local-model-status", {"model_type": 1})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "running" in data
+        assert data["model"]["tag"] == "llama3.1:8b"
 
 
 # ---------------------------------------------------------------------------

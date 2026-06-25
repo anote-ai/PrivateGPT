@@ -127,6 +127,15 @@ class TestInstallLocalModel:
         assert data["success"] is True
         assert data["already_installed"] is True
 
+    def test_install_returns_helpful_error_when_ollama_missing(self, client):
+        with patch("app.resolve_ollama_binary", return_value=None):
+            resp = _post(client, "/install-local-model", {"model_type": 0})
+
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert data["success"] is False
+        assert "Ollama CLI not found" in data["message"]
+
 
 # ---------------------------------------------------------------------------
 # /llama-status
@@ -165,6 +174,12 @@ class TestLocalModelStatus:
         data = resp.get_json()
         assert "running" in data
         assert data["model"]["tag"] == "llama3.1:8b"
+
+    def test_invalid_model_type_falls_back_to_default_model(self, client):
+        resp = _post(client, "/local-model-status", {"model_type": "invalid"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["model"]["tag"] == "qwen3:8b"
 
 
 # ---------------------------------------------------------------------------

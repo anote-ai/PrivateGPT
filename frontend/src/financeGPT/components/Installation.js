@@ -1,38 +1,31 @@
 import React, { useState } from "react";
 import "../styles/Chatbot.css";
-import fetcher from "../../http/RequestConfig";
 import { useNavigate } from "react-router-dom";
+import { installLocalModel } from "../localModels";
 
 
 function Installation() {
   const [isLoading, setIsLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
 
   const navigate = useNavigate();
 
   const goToHomeChatbot = () => {
-    navigate('/chatbot'); // Use the path you defined in your <Route>
+    navigate("/");
   };
-
-  /* const continueClick = () => {
-
-  } */
 
   const installDependencies = async () => {
     setIsLoading(true);
+    setStatusMessage("");
+
     try {
-      const response = await fetcher("install-local-model", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ model_type: 0 }),
-      });
-      await response.json();
-      setIsLoading(false); // Stop loading after fetch completes
+      const response = await installLocalModel(0);
+      setStatusMessage(response.message || "Download started. You can continue using the app while it installs.");
     } catch (e) {
-      console.error(e.error);
-      setIsLoading(false); // Stop loading on error
+      console.error(e);
+      setStatusMessage(e.message || "Failed to start the local model installation.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -56,6 +49,7 @@ function Installation() {
             <p>Click <a className="underline" target="_blank" rel="noopener noreferrer" href={"https://github.com/ollama/ollama"}>here</a> to download Ollama</p>
             <p>Once downloaded:</p>
             <div className="w-64 hover:bg-gray-500 cursor-pointer bg-gray-700 p-2 rounded-lg mb-5" onClick={installDependencies}>Install the recommended local model</div>
+            {statusMessage ? <p className="text-sm text-gray-300">{statusMessage}</p> : null}
           </div>
           <button onClick={goToHomeChatbot} className="text-xl bg-gray-800 hover:bg-gray-600 w-auto rounded-xl m-2 px-5 py-3 absolute bottom-10 right-10 mb-4 mr-4">
             Continue

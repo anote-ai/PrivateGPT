@@ -1,5 +1,6 @@
 """
 Tests for document management endpoints:
+  POST /download-chat-history
   POST /ingest-metadata
   POST /ingest-files/<chat_id>/<token>
   POST /retrieve-current-docs
@@ -18,6 +19,35 @@ def _post(client, url, payload=None):
         data=json.dumps(payload or {}),
         content_type="application/json",
     )
+
+
+# ---------------------------------------------------------------------------
+# /download-chat-history
+# ---------------------------------------------------------------------------
+
+class TestDownloadChatHistory:
+    def test_returns_csv_attachment(self, client):
+        messages = [
+            {"sent_from_user": 1, "message_text": "What changed this quarter?"},
+            {"sent_from_user": 0, "message_text": "Revenue increased 12% year over year."},
+        ]
+        with patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_message_from_db",
+            return_value=messages,
+        ):
+            resp = _post(client, "/download-chat-history", {"chat_id": 9, "chat_type": 0})
+
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/csv"
+        assert "attachment; filename=chat-history-9.csv" in resp.headers["Content-Disposition"]
+        decoded_body = resp.data.decode("utf-8")
+        assert "Query,Response" in decoded_body
+        assert "What changed this quarter?" in decoded_body
+
+    def test_requires_chat_id(self, client):
+        resp = _post(client, "/download-chat-history", {"chat_type": 0})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "chat_id is required."
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +169,13 @@ class TestIngestFiles:
         assert resp.status_code == 200
         mock_chunk.assert_not_called()
 
+    def test_rejects_non_pdf_uploads(self, client):
+        resp = self._make_pdf_upload(
+            client, 1, "test-token", "notes.txt", b"plain text content"
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Only PDF uploads are supported right now."
+
 
 # ---------------------------------------------------------------------------
 # /process-message-pdf — response generation
@@ -196,3 +233,42 @@ class TestProcessMessagePdf:
             resp = _post(client, "/process-message-pdf", self._payload(model_type=0))
         assert resp.status_code == 500
         assert "Qwen 3 8B" in resp.get_json()["error"]
+
+
+# ---------------------------------------------------------------------------
+# /process-ticker-info
+# ---------------------------------------------------------------------------
+
+class TestProcessTickerInfo:
+    def test_requires_ticker(self, client):
+        resp = _post(client, "/process-ticker-info", {"chat_id": 1, "ticker": ""})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Ticker is required."
+
+    def test_returns_success_when_processing_completes(self, client):
+        with patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.reset_uploaded_docs"
+        ), patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.download_10K_url_ticker",
+            return_value=("https://example.com/10k.pdf", "AAPL"),
+        ), patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.download_filing_as_pdf",
+            return_value="/tmp/aapl-10k.pdf",
+        ), patch(
+            "app.get_text_from_single_file",
+            return_value="10-K filing text",
+        ), patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.add_document_to_db",
+            return_value=(1, False),
+        ), patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.chunk_document"
+        ), patch(
+            "app.os.path.exists",
+            return_value=True,
+        ), patch(
+            "app.os.remove"
+        ):
+            resp = _post(client, "/process-ticker-info", {"chat_id": 1, "ticker": "AAPL"})
+
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "success"

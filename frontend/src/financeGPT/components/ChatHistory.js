@@ -3,8 +3,10 @@ import fetcher from "../../http/RequestConfig";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPen, faPenToSquare, faTrashCan, faCommentDots } from "@fortawesome/free-solid-svg-icons";
 import Modal from "../../components/Modal";
+import { useNotifications } from "../../components/Notifications";
 
 function ChatHistory(props) {
+  const { showError, showSuccess } = useNotifications();
   const [chats, setChats] = useState([]);
   const [chatToDelete, setChatToDelete] = useState(null);
   const [showConfirmPopupChat, setShowConfirmPopupChat] = useState(false);
@@ -12,10 +14,10 @@ function ChatHistory(props) {
   const [chatIdToRename, setChatIdToRename] = useState(null);
   const [newChatName, setNewChatName] = useState("");
 
-  // This list refreshes only when the selected chat changes or callers force a reload.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     retrieveAllChats();
+    // This list refreshes only when the selected chat changes or callers force a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.selectedChatId, props.forceUpdate]);
 
   const handleDeleteChat = (chat_id) => {
@@ -50,6 +52,7 @@ function ChatHistory(props) {
       setChats(response_data.chat_info || []);
     } catch (error) {
       console.error("Error fetching chats:", error);
+      showError(error.message || "Unable to load your chat history.", "Chat history unavailable");
     }
   };
 
@@ -81,10 +84,13 @@ function ChatHistory(props) {
           props.onChatSelect(mostRecentChat);
         } catch (e) {
           console.error("Error finding recent chat after deletion", e);
+          showError(e.message || "The chat was deleted, but we couldn't refresh the list cleanly.", "Refresh needed");
         }
+        showSuccess("The chat was deleted.", "Chat removed");
       }
     } catch (e) {
       console.error("Error deleting chat:", e);
+      showError(e.message || "Unable to delete this chat right now.", "Delete failed");
     }
   };
 
@@ -92,6 +98,7 @@ function ChatHistory(props) {
     const trimmedName = new_name.trim();
 
     if (!trimmedName) {
+      showError("Please enter a chat name before saving.", "Name required");
       return;
     }
 
@@ -104,9 +111,11 @@ function ChatHistory(props) {
       if (chat_id === props.selectedChatId) {
         props.setCurrChatName(trimmedName);
       }
+      showSuccess("Chat name updated.", "Renamed");
       retrieveAllChats();
     } catch (e) {
       console.error("Error renaming chat:", e);
+      showError(e.message || "Unable to rename this chat right now.", "Rename failed");
     }
   };
 
@@ -182,7 +191,10 @@ function ChatHistory(props) {
               .then(() => {
                 props.handleForceUpdate();
               })
-              .catch((error) => console.error("Error creating new chat:", error));
+              .catch((error) => {
+                console.error("Error creating new chat:", error);
+                showError(error.message || "Unable to create a new chat right now.", "Create failed");
+              });
           }}
         >
           <FontAwesomeIcon icon={faPenToSquare} />

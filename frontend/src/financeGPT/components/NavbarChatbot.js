@@ -4,6 +4,7 @@ import ChatHistory from "./ChatHistory";
 import Modal from "../../components/Modal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faFile, faChartLine, faLanguage } from "@fortawesome/free-solid-svg-icons";
+import { useNotifications } from "../../components/Notifications";
 
 const TASK_TYPES = [
   { id: 0, label: "File Uploader", icon: faFile, description: "Chat with your PDFs" },
@@ -12,6 +13,7 @@ const TASK_TYPES = [
 ];
 
 function NavbarChatbot(props) {
+  const { showError, showSuccess, showInfo } = useNotifications();
   const [showConfirmPopup, setShowConfirmPopup] = useState(false);
   const [showErrorKeyMessage, setShowErrorKeyMessage] = useState(false);
   const [showConfirmResetKey, setShowConfirmResetKey] = useState(false);
@@ -29,16 +31,32 @@ function NavbarChatbot(props) {
   const confirmSwitchChange = async () => {
     if (pendingTask === null) return;
 
-    await props.createNewChat(pendingTask, props.isPrivate);
-    setShowConfirmPopup(false);
-    setPendingTask(null);
+    try {
+      const chat = await props.createNewChat(pendingTask, props.isPrivate);
+      if (!chat) {
+        throw new Error("Unable to create a new chat for the selected task.");
+      }
+
+      showInfo("A fresh chat was created for the new task.", "Task switched");
+      setShowConfirmPopup(false);
+      setPendingTask(null);
+    } catch (error) {
+      console.error("Error switching task:", error);
+      showError(error.message || "Unable to switch tasks right now.", "Task switch failed");
+    }
   };
 
-  const confirmResetModel = () => {
-    resetChat();
-    addModelKeyToDb(null);
-    props.setConfirmedModelKey("");
-    setShowConfirmResetKey(false);
+  const confirmResetModel = async () => {
+    try {
+      await resetChat();
+      await addModelKeyToDb(null);
+      props.setConfirmedModelKey("");
+      showSuccess("Your OpenAI key was removed and the current chat was reset.", "Model key cleared");
+      setShowConfirmResetKey(false);
+    } catch (error) {
+      console.error("Error resetting model key:", error);
+      showError(error.message || "Unable to reset the model key right now.", "Reset failed");
+    }
   };
 
   const addModelKeyToDb = async (model_key_db) => {
@@ -82,8 +100,11 @@ function NavbarChatbot(props) {
       await changeChatMode(pendingModelType);
       props.setIsPrivate(pendingModelType);
       props.handleForceUpdate();
+      const nextModel = props.localModels.find((model) => model.id === pendingModelType);
+      showSuccess(`Switched this chat to ${nextModel?.label || "the selected model"}.`, "Model updated");
     } catch (e) {
       console.error("Error switching model:", e);
+      showError(e.message || "Unable to switch the local model for this chat.", "Model switch failed");
     } finally {
       setPendingModelType(null);
       setShowConfirmModelSwitch(false);
@@ -91,15 +112,11 @@ function NavbarChatbot(props) {
   };
 
   const changeChatMode = async (isPrivate) => {
-    try {
-      await fetcher("change-chat-mode", {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: props.selectedChatId, model_type: isPrivate }),
-      });
-    } catch (e) {
-      console.error("Error changing chat mode:", e);
-    }
+    await fetcher("change-chat-mode", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: props.selectedChatId, model_type: isPrivate }),
+    });
   };
 
   return (
@@ -256,6 +273,23 @@ function NavbarChatbot(props) {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="mt-3 rounded-xl border border-gray-800 bg-[#171A26] px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-white">{props.selectedLocalModel?.label}</p>
+                  <p className="text-xs text-gray-400">{props.selectedLocalModel?.description}</p>
+                </div>
+                <span
+                  className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                    props.selectedLocalModel?.installed
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : "bg-amber-500/15 text-amber-300"
+                  }`}
+                >
+                  {props.selectedLocalModel?.installed ? "Installed" : "Not installed"}
+                </span>
+              </div>
             </div>
           </div>
         </div>

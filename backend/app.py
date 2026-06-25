@@ -1,15 +1,13 @@
-from flask import Flask, request, jsonify, abort, redirect, send_file
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS, cross_origin
-from dotenv import load_dotenv
 #from tika import parser as p
-import openai
 import os
 import csv
+import io
 import ollama
 import subprocess
 import threading
 import re
-import PyPDF2
 import uuid
 import shutil
 
@@ -25,14 +23,6 @@ from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fal
 #load_dotenv()
 
 app = Flask(__name__)
-# TODO: Replace with your URLs.
-config = {
-  'ORIGINS': [
-    'http://localhost:3000',  # React
-    'http://dashboard.localhost:3000',  # React
-  ],
-}
-#CORS(app, resources={ r'/*': {'origins': config['ORIGINS']}}, supports_credentials=True)
 
 CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=True)
 
@@ -45,6 +35,26 @@ process_status_by_model = {
     model["id"]: create_process_status()
     for model in get_local_chat_models()
 }
+LEGACY_MODEL_INSTALL_KEYS = {
+    "llama2_exists": 0,
+    "mistral_exists": 1,
+}
+
+
+def get_request_payload():
+    return request.get_json(silent=True) or {}
+
+
+def payload_value(key, default=None):
+    return get_request_payload().get(key, default)
+
+
+def json_success(status_code=200, **payload):
+    return jsonify(payload), status_code
+
+
+def json_error(message, status_code=400, **payload):
+    return jsonify({"error": message, **payload}), status_code
 
 
 def get_ollama_manifest_path(model_tag):
@@ -74,8 +84,36 @@ def get_model_status(model_type):
     return process_status_by_model[model["id"]]
 
 
-def get_ollama_binary():
-    return os.getenv("OLLAMA_PATH") or shutil.which("ollama") or '/usr/local/bin/ollama'
+def resolve_ollama_binary():
+    configured_path = os.getenv("OLLAMA_PATH")
+    if configured_path:
+        if os.path.isabs(configured_path):
+            return configured_path if os.path.exists(configured_path) else None
+
+        resolved_path = shutil.which(configured_path)
+        if resolved_path:
+            return resolved_path
+
+    return shutil.which("ollama")
+
+
+def get_requested_model_type():
+    return get_request_payload().get("model_type", DEFAULT_CHAT_MODEL_TYPE)
+
+
+def build_local_models_response(include_legacy_keys=False):
+    models = [serialize_model(model) for model in get_local_chat_models()]
+    response = {
+        "models": models,
+        "default_model_type": DEFAULT_CHAT_MODEL_TYPE,
+        "embedding_model": LOCAL_EMBEDDING_MODEL,
+    }
+
+    if include_legacy_keys:
+        for response_key, index in LEGACY_MODEL_INSTALL_KEYS.items():
+            response[response_key] = models[index]["installed"] if len(models) > index else False
+
+    return response
 
 @app.before_request
 def before_request():
@@ -86,7 +124,7 @@ def before_request():
             headers = request.headers['Access-Control-Request-Headers']
 
         h = response.headers
-        h['Access-Control-Allow-Origin'] = request.headers['Origin']
+        h['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
         h['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS, DELETE'
         h['Access-Control-Allow-Headers'] = headers or 'Authorization, Content-Type' #'Authorization'
         h['Access-Control-Allow-Credentials'] = 'true'
@@ -101,38 +139,22 @@ def after_request(response):
 @app.route('/test-flask', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def test_flask():
-    print("hello world")
-    test = "hello world"
-    return jsonify(test=test)
+    return jsonify(test="hello world")
 
 #INSTALLATION
 @app.route('/local-models', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def local_models():
-    models = [serialize_model(model) for model in get_local_chat_models()]
-    return jsonify({
-        "models": models,
-        "default_model_type": DEFAULT_CHAT_MODEL_TYPE,
-        "embedding_model": LOCAL_EMBEDDING_MODEL,
-    })
+    return jsonify(build_local_models_response())
 
 
 @app.route('/check-models', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def check_models():
-    models = [serialize_model(model) for model in get_local_chat_models()]
-    return jsonify({
-        "models": models,
-        "default_model_type": DEFAULT_CHAT_MODEL_TYPE,
-        "embedding_model": LOCAL_EMBEDDING_MODEL,
-        # Legacy keys retained for backwards compatibility with older tests/UI.
-        "llama2_exists": models[0]["installed"] if len(models) > 0 else False,
-        "mistral_exists": models[1]["installed"] if len(models) > 1 else False,
-    })
+    return jsonify(build_local_models_response(include_legacy_keys=True))
 
 
-def run_model_pull_async(model):
-    ollama_path = get_ollama_binary()
+def run_model_pull_async(model, ollama_path):
     command = [ollama_path, 'pull', model["tag"]]
     process_status = process_status_by_model[model["id"]]
 
@@ -151,7 +173,6 @@ def run_model_pull_async(model):
 
         # Monitor the process output in real-time
         for line in iter(process.stdout.readline, ''):
-            print(line, end='')  # Debug: print each line to server log
             output_lines.append(line.strip())
             process_status["output"] = "\n".join(output_lines[-20:])
             match = time_left_regex.search(line)
@@ -170,7 +191,6 @@ def run_model_pull_async(model):
         if return_code == 0:
             process_status["error"] = ""
             process_status["progress"] = 100
-            print("process complete")
         else:
             process_status["error"] = process_status["output"] or f"Ollama exited with status {return_code}."
     except Exception as e:
@@ -184,6 +204,7 @@ def start_model_install(model_type):
     model = resolve_chat_model(model_type)
     process_status = process_status_by_model[model["id"]]
     serialized_model = serialize_model(model)
+    ollama_path = resolve_ollama_binary()
 
     if process_status["running"]:
         return jsonify({"success": False, "message": f"{model['label']} is already downloading."})
@@ -199,9 +220,19 @@ def start_model_install(model_type):
             "model": serialized_model,
         })
 
+    if not ollama_path:
+        process_status.update(create_process_status())
+        process_status["completed"] = True
+        process_status["error"] = "Ollama CLI not found. Install Ollama or set OLLAMA_PATH to the executable."
+        return jsonify({
+            "success": False,
+            "message": process_status["error"],
+            "model": serialized_model,
+        }), 400
+
     process_status.update(create_process_status())
     process_status["running"] = True
-    threading.Thread(target=run_model_pull_async, args=(model,), daemon=True).start()
+    threading.Thread(target=run_model_pull_async, args=(model, ollama_path), daemon=True).start()
     return jsonify({"success": True, "message": f"{model['label']} pull initiated.", "model": serialized_model})
 
 
@@ -223,9 +254,7 @@ def run_mistral():
 @app.route('/install-local-model', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def install_local_model():
-    payload = request.get_json(silent=True) or {}
-    model_type = payload.get('model_type', DEFAULT_CHAT_MODEL_TYPE)
-    return start_model_install(model_type)
+    return start_model_install(get_requested_model_type())
 
 
 @app.route('/llama-status', methods=['POST'])
@@ -242,16 +271,17 @@ def mistral_status():
 @app.route('/local-model-status', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def local_model_status():
-    payload = request.get_json(silent=True) or {}
-    model_type = payload.get('model_type', DEFAULT_CHAT_MODEL_TYPE)
-    return get_model_status_response(model_type)
+    return get_model_status_response(get_requested_model_type())
 
 @app.route('/download-chat-history', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def download_chat_history():
     try:
-        chat_type = request.json.get('chat_type')
-        chat_id = request.json.get('chat_id')
+        chat_type = payload_value('chat_type')
+        chat_id = payload_value('chat_id')
+
+        if chat_id is None:
+            return json_error("chat_id is required.")
 
         messages = retrieve_message_from_db(chat_id, chat_type)
 
@@ -260,27 +290,22 @@ def download_chat_history():
             if messages[i]['sent_from_user'] == 1 and messages[i+1]['sent_from_user'] == 0:
                 paired_messages.append((messages[i]['message_text'], messages[i+1]['message_text']))
 
-        output_directory = 'output_document'
-        if not os.path.exists(output_directory):
-            os.makedirs(output_directory)
+        csv_buffer = io.StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(['Query', 'Response'])
+        writer.writerows(paired_messages)
 
-        file_path = os.path.join(output_directory, 'chat_history.csv')
-
-        with open(file_path, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(['Query', 'Response'])  # Header
-            writer.writerows(paired_messages)
-
-        return "success"
-    except:
-        return "error"
+        response = Response(csv_buffer.getvalue(), mimetype='text/csv')
+        response.headers['Content-Disposition'] = f'attachment; filename=chat-history-{chat_id}.csv'
+        return response
+    except Exception as error:
+        return json_error("Unable to export chat history.", status_code=500, details=str(error))
 
 @app.route('/create-new-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def create_new_chat():
-
-    chat_type = request.json.get('chat_type')
-    model_type = request.json.get('model_type')
+    chat_type = payload_value('chat_type')
+    model_type = payload_value('model_type')
 
     chat_id = add_chat_to_db(chat_type, model_type) #for now hardcode the model type as being 0
 
@@ -299,9 +324,11 @@ def retrieve_chats():
 @app.route('/retrieve-messages-from-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def retrieve_messages_from_chat():
+    chat_type = payload_value('chat_type')
+    chat_id = payload_value('chat_id')
 
-    chat_type = request.json.get('chat_type')
-    chat_id = request.json.get('chat_id')
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     messages = retrieve_message_from_db(chat_id, chat_type)
 
@@ -310,19 +337,26 @@ def retrieve_messages_from_chat():
 @app.route('/update-chat-name', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def update_chat_name():
+    chat_name = payload_value('chat_name')
+    chat_id = payload_value('chat_id')
 
-    chat_name = request.json.get('chat_name')
-    chat_id = request.json.get('chat_id')
+    if chat_id is None:
+        return json_error("chat_id is required.")
+
+    if chat_name is None:
+        return json_error("chat_name is required.")
 
     update_chat_name_db(chat_id, chat_name)
 
-    return "Chat name updated"
+    return json_success(message="Chat name updated")
 
 @app.route('/delete-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def delete_chat():
-    chat_id = request.json.get('chat_id')
-    print("chat is", chat_id)
+    chat_id = payload_value('chat_id')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     return delete_chat_from_db(chat_id)
 
@@ -336,9 +370,10 @@ def find_most_recent_chat():
 @app.route('/ingest-metadata', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def ingest_metadata():
-    data = request.json
-    chat_id = data.get('chat_id')
-    print("Received chat_id:", chat_id)
+    chat_id = payload_value('chat_id')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
     
     upload_token = str(uuid.uuid4())  # Generate a unique token for the upload URL
     upload_url = f"ingest-files/{chat_id}/{upload_token}"
@@ -351,19 +386,28 @@ def ingest_files(chat_id, upload_token):
     files = request.files.getlist('files[]')
     MAX_CHUNK_SIZE = 1000
 
+    if not files:
+        return json_error("At least one PDF file is required.")
+
     for file in files:
+        filename = file.filename or ""
+        if not filename.lower().endswith(".pdf"):
+            return json_error("Only PDF uploads are supported right now.")
+
         text = get_text_from_single_file(file)
-        filename = file.filename
         doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
         if not doesExist:
             chunk_document(text, MAX_CHUNK_SIZE, doc_id)
 
-    return jsonify({"status": "success"})
+    return json_success(status="success")
 
 @app.route('/retrieve-current-docs', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def retrieve_current_docs():
-    chat_id = request.json.get('chat_id')
+    chat_id = payload_value('chat_id')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     doc_info = retrieve_docs_from_db(chat_id)
 
@@ -373,30 +417,39 @@ def retrieve_current_docs():
 @app.route('/delete-doc', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def delete_doc():
-    doc_id = request.json.get('doc_id')
+    doc_id = payload_value('doc_id')
+
+    if doc_id is None:
+        return json_error("doc_id is required.")
 
     delete_doc_from_db(doc_id)
 
-    return "success"
+    return json_success(message="Document deleted")
 
 @app.route('/change-chat-mode', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def change_chat_mode_and_reset_chat():
-    chat_mode_to_change_to = request.json.get('model_type')
-    chat_id = request.json.get('chat_id')
+    chat_mode_to_change_to = payload_value('model_type')
+    chat_id = payload_value('chat_id')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     try:
         reset_chat_db(chat_id)
         change_chat_mode_db(chat_mode_to_change_to, chat_id)
 
-        return "Success"
-    except:
-        return "Error"
+        return json_success(message="Chat mode updated")
+    except Exception as error:
+        return json_error("Unable to switch the local model for this chat.", status_code=500, details=str(error))
 
 @app.route('/reset-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def reset_chat():
-    chat_id = request.json.get('chat_id')
+    chat_id = payload_value('chat_id')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     return reset_chat_db(chat_id)
 
@@ -404,10 +457,16 @@ def reset_chat():
 @app.route('/process-message-pdf', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def process_message_pdf():
-    message = request.json.get('message')
-    chat_id = request.json.get('chat_id')
-    model_type = request.json.get('model_type')
-    model_key = request.json.get('model_key')
+    message = payload_value('message')
+    chat_id = payload_value('chat_id')
+    model_type = payload_value('model_type')
+    model_key = payload_value('model_key')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
+
+    if not message or not str(message).strip():
+        return json_error("message is required.")
 
     ##Include part where we verify if user actually owns the chat_id later
 
@@ -419,7 +478,6 @@ def process_message_pdf():
     #Get most relevant section from the document
     sources = get_relevant_chunks(2, query, chat_id)
     sources_str = " ".join([", ".join(str(elem) for elem in source) for source in sources])
-    print("sources_str", sources_str)
 
     system_prompt = (
         "You are an expert financial analyst AI assistant. Answer the user's question based on the provided document sources. "
@@ -444,7 +502,7 @@ def process_message_pdf():
             )
             answer = response.choices[0].message.content.strip()
         except Exception as e:
-            return jsonify({"error": f"OpenAI API error: {str(e)}"}), 500
+            return json_error(f"OpenAI API error: {str(e)}", status_code=500)
     else:
         local_model = resolve_chat_model(model_type)
         try:
@@ -453,45 +511,57 @@ def process_message_pdf():
                 {'role': 'user', 'content': user_prompt},
             ])
             answer = response['message']['content']
-        except Exception as e:
-            return jsonify({"error": f"Error with {local_model['label']}"}), 500
+        except Exception:
+            return json_error(f"Error with {local_model['label']}", status_code=500)
 
     #This adds bot message
     message_id = add_message_to_db(answer, chat_id, 0)
     
     try:
         add_sources_to_db(message_id, sources)
-    except:
-        print("error adding sources to db or no sources")
+    except Exception:
+        pass
 
     return jsonify(answer=answer)
 
 @app.route('/add-model-key', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def add_model_key():
-    model_key = request.json.get('model_key')
-    chat_id = request.json.get('chat_id')
+    model_key = payload_value('model_key')
+    chat_id = payload_value('chat_id')
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     add_model_key_to_db(model_key, chat_id)
 
-    return "success"
+    return json_success(message="Model key updated")
 
 
 #Edgar
 @app.route('/check-valid-ticker', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def check_valid_ticker():
-   ticker = request.json.get('ticker')
+   ticker = payload_value('ticker')
+
+   if not ticker:
+       return jsonify({'isValid': False})
+
    result = check_valid_api(ticker)
    return jsonify({'isValid': result})
 
 @app.route('/add-ticker-to-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def add_ticker():
+    ticker = payload_value('ticker')
+    chat_id = payload_value('chat_id')
+    isUpdate = payload_value('isUpdate')
 
-    ticker = request.json.get('ticker')
-    chat_id = request.json.get('chat_id')
-    isUpdate = request.json.get('isUpdate')
+    if chat_id is None:
+        return json_error("chat_id is required.")
+
+    if not ticker:
+        return json_error("ticker is required.")
 
     return add_ticker_to_chat_db(chat_id, ticker, isUpdate)
 
@@ -499,39 +569,43 @@ def add_ticker():
 @app.route('/process-ticker-info', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def process_ticker_info():
-    chat_id = request.json.get('chat_id')
-    ticker = request.json.get('ticker')
+    chat_id = payload_value('chat_id')
+    ticker = payload_value('ticker')
 
-    if ticker:
-        MAX_CHUNK_SIZE = 1000
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
-        reset_uploaded_docs(chat_id)
+    if not ticker:
+        return jsonify({"error": "Ticker is required."}), 400
 
-        url, ticker = download_10K_url_ticker(ticker)
-        filename = download_filing_as_pdf(url, ticker)
+    MAX_CHUNK_SIZE = 1000
 
-        text = get_text_from_single_file(filename)
+    reset_uploaded_docs(chat_id)
 
-        doc_id, doesExist = add_document_to_db(text, filename, chat_id)
+    url, ticker = download_10K_url_ticker(ticker)
+    filename = download_filing_as_pdf(url, ticker)
 
-        if not doesExist:
-            chunk_document(text, MAX_CHUNK_SIZE, doc_id)
+    text = get_text_from_single_file(filename)
 
-        if os.path.exists(filename):
-            os.remove(filename)
-            print(f"File '{filename}' has been deleted.")
-        else:
-            print(f"The file '{filename}' does not exist.")
+    doc_id, doesExist = add_document_to_db(text, filename, chat_id)
 
+    if not doesExist:
+        chunk_document(text, MAX_CHUNK_SIZE, doc_id)
 
-    return jsonify({"error": "Invalid JWT"}), 200
+    if os.path.exists(filename):
+        os.remove(filename)
+
+    return jsonify({"status": "success"}), 200
 
 @app.route('/infer-chat-name', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def infer_chat_name():
-    messages = request.json.get('messages', '')
-    chat_id = request.json.get('chat_id')
-    model_type = request.json.get('model_type', DEFAULT_CHAT_MODEL_TYPE)
+    messages = payload_value('messages', '')
+    chat_id = payload_value('chat_id')
+    model_type = payload_value('model_type', DEFAULT_CHAT_MODEL_TYPE)
+
+    if chat_id is None:
+        return json_error("chat_id is required.")
 
     prompt_msg = [{
         'role': 'user',
@@ -562,11 +636,11 @@ def infer_chat_name():
 @app.route('/translate-text', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def translate_text_endpoint():
-    text = request.json.get('text', '')
-    source_language = request.json.get('source_language', 'Auto-detect')
-    target_language = request.json.get('target_language', 'Spanish')
-    model_key = request.json.get('model_key', '')
-    chat_id = request.json.get('chat_id')
+    text = payload_value('text', '')
+    source_language = payload_value('source_language', 'Auto-detect')
+    target_language = payload_value('target_language', 'Spanish')
+    model_key = payload_value('model_key', '')
+    chat_id = payload_value('chat_id')
 
     if not text.strip():
         return jsonify({"error": "No text provided"}), 400

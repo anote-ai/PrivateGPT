@@ -1,107 +1,15 @@
-// import axios from "axios";
-// import React, { useRef, useState } from "react";
-// import { Document, Page } from "react-pdf";
-// import { pdfjs } from "react-pdf";
-// import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-// import { faFileUpload } from "@fortawesome/free-solid-svg-icons";
-// pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
-
-// // print("At Anote, we offer two solutions for interacting with your documents:")
-// // print("1. PrivateGPT: Our 100% private chat solution ensures that no data is leaked during any stage of your conversation. However, processing may take longer as it runs locally on your machine.")
-// // print("2. Semi-private: This solution also provides a good level of privacy, but we use the OPENAI LLM model for enhanced query accuracy.")
-
-// // is_private = input("Please choose an option (enter 1 or 2): ")
-// function PDFUploader() {
-//   const [file, setFile] = useState();
-//   const [numPages, setNumPages] = useState(null);
-//   const fileInputRef = useRef();
-
-//   const onDocumentLoadSuccess = ({ numPages }) => {
-//     setNumPages(numPages);
-//   };
-
-//   const uploadFile = (e) => {
-//     const files = e.target.files;
-//     const formData = new FormData();
-//     for (let i = 0; i < files.length; i++) {
-//       formData.append("files", files[i]);
-//     }
-
-//     // Send the files to the Flask app
-//     axios
-//       .post("http://localhost:5000/api/process-pdf", formData, {
-//         headers: {
-//           "Content-Type": "multipart/form-data",
-//         },
-//       })
-//       .then((response) => {
-//         console.log("PDF files uploaded successfully");
-//       })
-//       .catch((error) => {
-//         console.error("Failed to upload PDF files:", error);
-//       });
-//   };
-
-//   const handleUploadBtnClick = () => {
-//     fileInputRef.current.click();
-//   };
-
-//   return (
-//     <div>
-//       <input
-//         type="file"
-//         style={{ display: "none" }}
-//         ref={fileInputRef}
-//         onChange={uploadFile}
-//         accept=".pdf"
-//         multiple // Allow multiple file selection
-//       />
-//       <div className="upload-button send-button">
-//         <FontAwesomeIcon
-//           icon={faFileUpload}
-//           onClick={handleUploadBtnClick}
-//           className="file-upload"
-//         />
-//       </div>
-//       <div>
-//         {file && (
-//           <div>
-//             {Array.from(file).map((singleFile, fileIndex) => (
-//               <Document
-//                 key={`file_${fileIndex}`}
-//                 file={singleFile}
-//                 onLoadSuccess={onDocumentLoadSuccess}
-//               >
-//                 {Array.from(new Array(numPages), (el, pageIndex) => (
-//                   <Page
-//                     key={`page_${fileIndex}_${pageIndex + 1}`}
-//                     pageNumber={pageIndex + 1}
-//                   />
-//                 ))}
-//               </Document>
-//             ))}
-//           </div>
-//         )}
-//       </div>
-//     </div>
-//   );
-//                 }
-
 import React, { useRef, useState } from "react";
 import { Document, Page } from "react-pdf";
 import { pdfjs } from "react-pdf";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faFileUpload } from "@fortawesome/free-solid-svg-icons";
 import fetcher from "../../http/RequestConfig";
+import { useNotifications } from "../../components/Notifications";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
-// print("At Anote, we offer two solutions for interacting with your documents:")
-// print("1. PrivateGPT: Our 100% private chat solution ensures that no data is leaked during any stage of your conversation. However, processing may take longer as it runs locally on your machine.")
-// print("2. Semi-private: This solution also provides a good level of privacy, but we use the OPENAI LLM model for enhanced query accuracy.")
-
-// is_private = input("Please choose an option (enter 1 or 2): ")
 function PDFUploader({ chat_id, handleForceUpdate }) {
+  const { showError, showSuccess } = useNotifications();
   const [file, setFile] = useState();
   const [numPages, setNumPages] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -126,95 +34,56 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
     zIndex: 1000,
   };
 
-  // const uploadFile = async (e) => {
-  //   const files = e.target.files;
-
-  //   const formData = new FormData();
-  //   for (let i = 0; i < files.length; i++) {
-  //     formData.append("files[]", files[i]);
-  //   }
-
-  //   console.log("chat_id", chat_id);
-  //   formData.append("chat_id", chat_id);
-
-  //   setIsUploading(true);
-
-  //   console.log("form data", formData)
-
-  //   try {
-  //     const response = await fetcher("ingest-pdf", {
-  //       method: "POST",
-  //       body: formData,
-  //     })
-  //       const response_str = await response.json();
-  //       setIsUploading(false);
-  //       handleForceUpdate();
-  //   } catch (error) {
-  //     console.error("Error during file upload")
-  //   }
-
-  // };
-
   const uploadMetadata = async (chatId) => {
-    try {
-      const response = await fetcher("ingest-metadata", {
-        method: "POST",
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          chat_id: chatId,
-        })
-      });
-  
-      const result = await response.json();
-      return result.uploadUrl;
-    } catch (error) {
-      console.error("Error uploading metadata", error);
-    }
+    const response = await fetcher("ingest-metadata", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: JSON.stringify({ chat_id: chatId }),
+    });
+
+    const result = await response.json();
+    return result.uploadUrl;
   };
-  
+
   const uploadFiles = async (files, uploadUrl) => {
     const formData = new FormData();
+
     for (let i = 0; i < files.length; i++) {
       formData.append("files[]", files[i]);
     }
 
-    console.log("form data", formData)
-    console.log("form data entries:", Array.from(formData.entries()));
-  
-    try {
-      //const response = await fetcher(uploadUrl, {
-      const response = await fetch(`http://127.0.0.1:5000/${uploadUrl}`, {
-        method: "POST",
-        body: formData
-      });
-  
-      const result = await response.json();
-      console.log("Files uploaded:", result);
-    } catch (error) {
-      console.error("Error uploading files", error);
-    }
+    await fetcher(uploadUrl, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: formData,
+    });
   };
-  
+
   const uploadFile = async (e) => {
     const files = e.target.files;
-    const chatId = chat_id;
-  
+    if (!files?.length || !chat_id) {
+      return;
+    }
+
     setFile(files);
     setIsUploading(true);
-  
+
     try {
-      const uploadUrl = await uploadMetadata(chatId);
+      const uploadUrl = await uploadMetadata(chat_id);
+      if (!uploadUrl) {
+        throw new Error("Missing upload URL from the server.");
+      }
+
       await uploadFiles(files, uploadUrl);
-      setIsUploading(false);
-      handleForceUpdate();
+      handleForceUpdate?.();
+      showSuccess(`${files.length} file${files.length > 1 ? "s were" : " was"} uploaded successfully.`, "Upload complete");
     } catch (error) {
       console.error("Error during file upload", error);
+      showError(error.message || "We couldn't upload that PDF. Please try again.", "Upload failed");
+    } finally {
       setIsUploading(false);
     }
   };
-  
 
   const handleUploadBtnClick = () => {
     fileInputRef.current.click();

@@ -4,17 +4,19 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTrashCan, faFileAlt } from "@fortawesome/free-solid-svg-icons";
 import Sources from "./Sources";
 import Modal from "../../components/Modal";
+import { useNotifications } from "../../components/Notifications";
 
 function SidebarChatbot(props) {
+  const { showError, showSuccess } = useNotifications();
   const [docs, setDocs] = useState([]);
   const [showConfirmPopupDoc, setShowConfirmPopupDoc] = useState(false);
   const [docToDeleteName, setDocToDeleteName] = useState(null);
   const [docToDeleteId, setDocToDeleteId] = useState(null);
 
-  // Documents are refreshed from the active chat context and explicit refresh triggers.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     retrieveDocs();
+    // Documents are refreshed from the active chat context and explicit refresh triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.selectedChatId, props.forceUpdate]);
 
   const handleDeleteDoc = (doc_name, doc_id) => {
@@ -29,6 +31,11 @@ function SidebarChatbot(props) {
   };
 
   const retrieveDocs = async () => {
+    if (props.selectedChatId === null || props.selectedChatId === undefined) {
+      setDocs([]);
+      return;
+    }
+
     try {
       const response = await fetcher("retrieve-current-docs", {
         method: "POST",
@@ -36,9 +43,10 @@ function SidebarChatbot(props) {
         body: JSON.stringify({ chat_id: props.selectedChatId }),
       });
       const response_data = await response.json();
-      setDocs(response_data.doc_info);
+      setDocs(response_data.doc_info || []);
     } catch (e) {
       console.error("Error retrieving docs:", e);
+      showError(e.message || "Unable to load the uploaded documents for this chat.", "Documents unavailable");
     }
   };
 
@@ -50,8 +58,10 @@ function SidebarChatbot(props) {
         body: JSON.stringify({ doc_id }),
       });
       props.handleForceUpdate();
+      showSuccess("Document deleted from this chat.", "Document removed");
     } catch (e) {
       console.error("Error deleting doc:", e);
+      showError(e.message || "Unable to delete this document right now.", "Delete failed");
     }
   };
 

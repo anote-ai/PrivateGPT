@@ -12,6 +12,7 @@ import fetcher from "../../../http/RequestConfig";
 import TypingIndicator from "../TypingIndicator";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useNotifications } from "../../../components/Notifications";
 
 const LANGUAGES = [
   { code: "Spanish", label: "Spanish" },
@@ -60,6 +61,7 @@ function CopyButton({ text }) {
 }
 
 const ChatbotTranslation = (props) => {
+  const { showError } = useNotifications();
   const [sourceText, setSourceText] = useState("");
   const [targetLang, setTargetLang] = useState("Spanish");
   const [sourceLang, setSourceLang] = useState("English");
@@ -92,11 +94,12 @@ const ChatbotTranslation = (props) => {
         setMessages([WELCOME_MESSAGE, ...transformedMessages]);
       } catch (error) {
         console.error("Error loading translation history:", error);
+        showError(error.message || "Unable to load translation history.", "History unavailable");
       }
     };
 
     loadTranslationHistory();
-  }, [props.selectedChatId]);
+  }, [props.selectedChatId, showError]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -155,6 +158,7 @@ const ChatbotTranslation = (props) => {
 
       scrollToBottom();
     } catch (e) {
+      showError(e.message || "Translation failed. Please check your API key settings.", "Translation failed");
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === tempId

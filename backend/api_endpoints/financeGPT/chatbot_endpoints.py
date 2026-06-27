@@ -1,6 +1,5 @@
 import sqlite3
 import os
-import openai
 import numpy as np
 import ollama
 from sec_api import QueryApi, RenderApi
@@ -10,12 +9,27 @@ import sys
 from dotenv import load_dotenv
 from local_models import LOCAL_EMBEDDING_MODEL, normalize_model_type
 
+try:
+    import openai
+except ImportError:
+    class _MissingOpenAIClient:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError(
+                "The openai package is required for translation and OpenAI-backed chat features."
+            )
+
+    class _MissingOpenAI:
+        OpenAI = _MissingOpenAIClient
+
+    openai = _MissingOpenAI()
+
 load_dotenv()
 
 sec_api_key = os.getenv("SEC_API_KEY", "")
 
 
 USER_ID = 1
+TRANSLATION_API_KEY_REQUIRED_MESSAGE = "Translation requires an OpenAI API key. Please add one in Settings."
 
 
 def dict_factory(cursor, row):
@@ -630,7 +644,7 @@ def translate_text(text, source_language, target_language, model_key=None):
     else:
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
-            return f"[Translation requires an OpenAI API key. Please add one in Settings.]\n\nOriginal text: {text}"
+            return f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]\n\nOriginal text: {text}"
         client = openai.OpenAI(api_key=api_key)
 
     source_desc = f"from {source_language}" if source_language and source_language != "Auto-detect" else ""

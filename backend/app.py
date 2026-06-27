@@ -16,7 +16,7 @@ from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_
                                                         find_most_recent_chat_from_db, add_document_to_db, chunk_document, update_chat_name_db, delete_chat_from_db, \
                                                         reset_chat_db, change_chat_mode_db, add_message_to_db, get_relevant_chunks, add_sources_to_db, add_model_key_to_db, \
                                                         check_valid_api, reset_uploaded_docs, add_ticker_to_chat_db, download_10K_url_ticker, download_filing_as_pdf, \
-                                                        get_text_from_single_file, translate_text
+                                                        get_text_from_single_file, translate_text, TRANSLATION_API_KEY_REQUIRED_MESSAGE
 from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fallback_chat_models, get_local_chat_models, resolve_chat_model
 
 
@@ -55,6 +55,10 @@ def json_success(status_code=200, **payload):
 
 def json_error(message, status_code=400, **payload):
     return jsonify({"error": message, **payload}), status_code
+
+
+def is_translation_key_error(message):
+    return isinstance(message, str) and message.startswith(f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]")
 
 
 def get_ollama_manifest_path(model_tag):
@@ -647,6 +651,12 @@ def translate_text_endpoint():
 
     try:
         translation = translate_text(text, source_language, target_language, model_key or None)
+
+        if is_translation_key_error(translation):
+            return json_error(
+                f"{TRANSLATION_API_KEY_REQUIRED_MESSAGE} You can also configure OPENAI_API_KEY on the backend.",
+                status_code=400,
+            )
 
         # Persist to DB if we have a chat_id
         if chat_id:

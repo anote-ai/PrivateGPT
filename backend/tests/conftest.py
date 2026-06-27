@@ -4,9 +4,22 @@ Pytest configuration and shared fixtures for the PrivateGPT backend test suite.
 import os
 import sys
 import pytest
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 # Ensure backend directory is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+# Provide lightweight stand-ins for optional runtime dependencies so tests can
+# focus on application behavior instead of local package availability.
+sys.modules.setdefault("ollama", SimpleNamespace(chat=MagicMock()))
+sys.modules.setdefault(
+    "sec_api",
+    SimpleNamespace(QueryApi=MagicMock(), RenderApi=MagicMock()),
+)
+sys.modules.setdefault("openai", SimpleNamespace(OpenAI=MagicMock()))
+sys.modules.setdefault("PyPDF2", SimpleNamespace(PdfReader=MagicMock()))
+sys.modules.setdefault("dotenv", SimpleNamespace(load_dotenv=MagicMock()))
 
 # Use a temporary in-memory database for all tests
 os.environ['DB_PATH'] = ':memory:'

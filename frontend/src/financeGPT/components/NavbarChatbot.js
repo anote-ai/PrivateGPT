@@ -1,10 +1,21 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import fetcher from "../../http/RequestConfig";
 import ChatHistory from "./ChatHistory";
 import Modal from "../../components/Modal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faFile, faChartLine, faLanguage } from "@fortawesome/free-solid-svg-icons";
+import {
+  faArrowRotateRight,
+  faChartLine,
+  faDownload,
+  faEye,
+  faEyeSlash,
+  faFile,
+  faKey,
+  faLanguage,
+} from "@fortawesome/free-solid-svg-icons";
 import { useNotifications } from "../../components/Notifications";
+import LocalModelInstallModal from "./LocalModelInstallModal";
+import useLocalModelInstallation from "../hooks/useLocalModelInstallation";
 
 const TASK_TYPES = [
   { id: 0, label: "File Uploader", icon: faFile, description: "Chat with your PDFs" },
@@ -15,11 +26,44 @@ const TASK_TYPES = [
 function NavbarChatbot(props) {
   const { showError, showSuccess, showInfo } = useNotifications();
   const [showConfirmPopup, setShowConfirmPopup] = useState(false);
-  const [showErrorKeyMessage, setShowErrorKeyMessage] = useState(false);
   const [showConfirmResetKey, setShowConfirmResetKey] = useState(false);
   const [showConfirmModelSwitch, setShowConfirmModelSwitch] = useState(false);
   const [pendingTask, setPendingTask] = useState(null);
   const [pendingModelType, setPendingModelType] = useState(null);
+  const [modelKeyInput, setModelKeyInput] = useState("");
+  const [showModelKey, setShowModelKey] = useState(false);
+  const [isSavingModelKey, setIsSavingModelKey] = useState(false);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
+  const {
+    closeInstallationModal,
+    installDependencies,
+    installError,
+    isLoading,
+    openInstallationModal,
+    progress,
+    showInstallationModal,
+    timeLeft,
+  } = useLocalModelInstallation({
+    modelType: props.isPrivate,
+    onInstalled: props.refreshLocalModels,
+  });
+
+  useEffect(() => {
+    setModelKeyInput(props.confirmedModelKey || "");
+    setShowModelKey(false);
+  }, [props.confirmedModelKey, props.selectedChatId]);
+
+  const maskModelKey = (key) => {
+    if (!key) {
+      return "Not set";
+    }
+
+    if (key.length <= 8) {
+      return "*".repeat(key.length);
+    }
+
+    return `${key.slice(0, 4)}${"*".repeat(Math.max(4, key.length - 8))}${key.slice(-4)}`;
+  };
 
   const handleTaskChange = (taskId) => {
     if (taskId !== props.currTask) {
@@ -48,33 +92,78 @@ function NavbarChatbot(props) {
 
   const confirmResetModel = async () => {
     try {
-      await resetChat();
-      await addModelKeyToDb(null);
+      await addModelKeyToDb(null, props.selectedChatId);
       props.setConfirmedModelKey("");
-      showSuccess("Your OpenAI key was removed and the current chat was reset.", "Model key cleared");
+      setModelKeyInput("");
+      showSuccess(
+        "This chat will stop using the saved OpenAI key and fall back to the local model or backend default key.",
+        "Model key removed"
+      );
       setShowConfirmResetKey(false);
     } catch (error) {
-      console.error("Error resetting model key:", error);
-      showError(error.message || "Unable to reset the model key right now.", "Reset failed");
+      console.error("Error clearing model key:", error);
+      showError(error.message || "Unable to remove the model key right now.", "Remove failed");
     }
   };
 
-  const addModelKeyToDb = async (model_key_db) => {
+  const addModelKeyToDb = async (model_key_db, chatId = props.selectedChatId) => {
     await fetcher("add-model-key", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: props.selectedChatId, model_key: model_key_db }),
+      body: JSON.stringify({ chat_id: chatId, model_key: model_key_db }),
     });
     props.handleForceUpdate();
   };
 
-  const resetChat = async () => {
-    await fetcher("reset-chat", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: props.selectedChatId }),
-    });
-    props.handleForceUpdate();
+  const ensureSettingsChat = async () => {
+    if (props.selectedChatId !== null && props.selectedChatId !== undefined) {
+      return props.selectedChatId;
+    }
+
+    const chat = await props.createNewChat(props.currTask, props.isPrivate, true);
+    if (!chat?.id) {
+      throw new Error("Unable to create a chat for saving this key.");
+    }
+
+    return chat.id;
+  };
+
+  const handleSaveModelKey = async () => {
+    const trimmedKey = modelKeyInput.trim();
+
+    if (!trimmedKey) {
+      showError("Enter an OpenAI API key before saving.", "API key required");
+      return;
+    }
+
+    setIsSavingModelKey(true);
+    try {
+      const chatId = await ensureSettingsChat();
+      await addModelKeyToDb(trimmedKey, chatId);
+      props.setConfirmedModelKey(trimmedKey);
+      showSuccess(
+        "OpenAI is now enabled for this chat. Future responses can use your saved key.",
+        "Model key saved"
+      );
+    } catch (error) {
+      console.error("Error saving model key:", error);
+      showError(error.message || "Unable to save the model key right now.", "Save failed");
+    } finally {
+      setIsSavingModelKey(false);
+    }
+  };
+
+  const handleRefreshModels = async () => {
+    setIsRefreshingModels(true);
+    try {
+      await props.refreshLocalModels();
+      showSuccess("Local model availability was refreshed.", "Status updated");
+    } catch (error) {
+      console.error("Error refreshing local models:", error);
+      showError(error.message || "Unable to refresh local model availability.", "Refresh failed");
+    } finally {
+      setIsRefreshingModels(false);
+    }
   };
 
   const handleModelChange = (value) => {
@@ -119,8 +208,22 @@ function NavbarChatbot(props) {
     });
   };
 
+  const selectedModelName = props.selectedLocalModel?.label || "Selected Model";
+  const hasConfirmedModelKey = Boolean(props.confirmedModelKey);
+
   return (
     <>
+      <LocalModelInstallModal
+        isOpen={showInstallationModal}
+        onClose={closeInstallationModal}
+        isLoading={isLoading}
+        progress={progress}
+        timeLeft={timeLeft}
+        error={installError}
+        modelName={selectedModelName}
+        onInstall={installDependencies}
+      />
+
       {/* Confirm task switch modal */}
       <Modal
         isOpen={showConfirmPopup}
@@ -170,38 +273,21 @@ function NavbarChatbot(props) {
         </div>
       </Modal>
 
-      {/* Error: can't add model key in private mode */}
-      <Modal
-        isOpen={showErrorKeyMessage}
-        onClose={() => setShowErrorKeyMessage(false)}
-        title="Not Available"
-      >
-        <p className="text-gray-300 mb-4">
-          You cannot add an OpenAI model key while in private mode.
-        </p>
-        <button
-          onClick={() => setShowErrorKeyMessage(false)}
-          className="w-full py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
-        >
-          Close
-        </button>
-      </Modal>
-
-      {/* Confirm reset model key */}
+      {/* Confirm remove model key */}
       <Modal
         isOpen={showConfirmResetKey}
         onClose={() => setShowConfirmResetKey(false)}
-        title="Reset Model Key?"
+        title="Remove OpenAI Key?"
       >
         <p className="text-gray-300 mb-4">
-          This will reset your OpenAI key and clear your current chat history.
+          This removes the saved OpenAI key from the current chat. Existing messages stay as-is, but future responses will stop using that key.
         </p>
         <div className="flex space-x-3">
           <button
             onClick={confirmResetModel}
             className="flex-1 py-2 bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] text-white rounded-lg font-semibold hover:opacity-90"
           >
-            Reset
+            Remove key
           </button>
           <button
             onClick={() => setShowConfirmResetKey(false)}
@@ -290,6 +376,101 @@ function NavbarChatbot(props) {
                   {props.selectedLocalModel?.installed ? "Installed" : "Not installed"}
                 </span>
               </div>
+              <div className="mt-3 flex gap-2">
+                {!props.selectedLocalModel?.installed && (
+                  <button
+                    type="button"
+                    onClick={openInstallationModal}
+                    className="flex-1 rounded-lg bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] px-3 py-2 text-xs font-semibold text-white hover:opacity-90"
+                  >
+                    <FontAwesomeIcon icon={faDownload} className="mr-2" />
+                    Install model
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleRefreshModels}
+                  disabled={isRefreshingModels}
+                  className={`rounded-lg border border-gray-700 px-3 py-2 text-xs font-semibold text-gray-200 ${
+                    props.selectedLocalModel?.installed ? "flex-1" : ""
+                  } ${isRefreshingModels ? "opacity-60 cursor-not-allowed" : "hover:border-[#50B7C3] hover:text-white"}`}
+                >
+                  <FontAwesomeIcon icon={faArrowRotateRight} className="mr-2" />
+                  {isRefreshingModels ? "Refreshing..." : "Refresh status"}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 border-t border-gray-800 pt-3">
+              <div className="flex items-start justify-between gap-3 px-1">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <FontAwesomeIcon icon={faKey} className="text-[#50B7C3] text-xs" />
+                    <span className="text-sm font-medium text-gray-200">OpenAI API Key</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Optional. Save a key for this chat to use OpenAI responses and translation when you do not want to rely only on local models.
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                    hasConfirmedModelKey
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : "bg-gray-700 text-gray-300"
+                  }`}
+                >
+                  {hasConfirmedModelKey ? "Saved to chat" : "Not set"}
+                </span>
+              </div>
+
+              <p className="mt-3 px-1 text-xs text-gray-500">
+                Current key: <span className="font-mono text-gray-400">{maskModelKey(props.confirmedModelKey)}</span>
+              </p>
+
+              <div className="relative mt-3">
+                <input
+                  type={showModelKey ? "text" : "password"}
+                  value={modelKeyInput}
+                  onChange={(event) => setModelKeyInput(event.target.value)}
+                  placeholder="sk-..."
+                  className="w-full rounded-lg border border-gray-700 bg-[#1E2030] px-3 py-2 pr-10 text-sm text-white placeholder:text-gray-500 focus:border-[#50B7C3] focus:ring-0"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowModelKey((current) => !current)}
+                  className="absolute inset-y-0 right-2 text-gray-400 hover:text-white"
+                  title={showModelKey ? "Hide key" : "Show key"}
+                >
+                  <FontAwesomeIcon icon={showModelKey ? faEyeSlash : faEye} />
+                </button>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveModelKey}
+                  disabled={!modelKeyInput.trim() || isSavingModelKey}
+                  className={`flex-1 rounded-lg bg-gradient-to-r from-[#2E5C82] to-[#50B7C3] px-3 py-2 text-xs font-semibold text-white ${
+                    !modelKeyInput.trim() || isSavingModelKey ? "cursor-not-allowed opacity-60" : "hover:opacity-90"
+                  }`}
+                >
+                  {isSavingModelKey ? "Saving..." : hasConfirmedModelKey ? "Update key" : "Save key"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmResetKey(true)}
+                  disabled={!hasConfirmedModelKey}
+                  className={`rounded-lg border border-gray-700 px-3 py-2 text-xs font-semibold text-gray-200 ${
+                    hasConfirmedModelKey ? "hover:border-red-400 hover:text-red-200" : "cursor-not-allowed opacity-50"
+                  }`}
+                >
+                  Remove key
+                </button>
+              </div>
+
+              <p className="mt-2 px-1 text-xs text-gray-500">
+                If no chat is selected yet, saving a key here will create a new chat for the current task automatically.
+              </p>
             </div>
           </div>
         </div>

@@ -41,3 +41,7 @@ dbName = os.getenv("DB_NAME", "financegpt")
 dbHost = os.getenv("DB_HOST", "localhost")
 dbPassword = os.getenv("DB_PASSWORD", "")
 dbUser = os.getenv("DB_USER", "admin")
+
+# Local developer MySQL setups (see database/db.py, database/db_auth.py)
+localDbRootPassword = os.getenv("LOCAL_DB_ROOT_PASSWORD", "")
+localDbSocketPassword = os.getenv("LOCAL_DB_SOCKET_PASSWORD", "")

@@ -16,10 +16,31 @@ LOCAL_CHAT_MODELS = [
         "label": "Llama 3.1 8B",
         "description": "Strong general-purpose local model with broad ecosystem support.",
     },
+    {
+        "id": 2,
+        "key": "qwen2_5_3b",
+        "tag": "qwen2.5:3b",
+        "label": "Qwen 2.5 3B",
+        "description": "Lightweight option for machines with 8GB RAM or less.",
+    },
 ]
 
 DEFAULT_CHAT_MODEL_TYPE = int(os.getenv("DEFAULT_LOCAL_CHAT_MODEL_TYPE", "0"))
 LOCAL_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "embeddinggemma")
+
+# Some macOS 12/13 + limited-VRAM Macs hit a Metal GGML_ASSERT(buf_dst) crash
+# in llama.cpp's GPU offloading path. Setting OLLAMA_NUM_GPU=0 works around it
+# by forcing CPU-only inference (see ggml-org/llama.cpp#16266).
+_OLLAMA_NUM_GPU = os.getenv("OLLAMA_NUM_GPU")
+
+
+def get_ollama_options():
+    if not _OLLAMA_NUM_GPU:
+        return {}
+    try:
+        return {"num_gpu": int(_OLLAMA_NUM_GPU)}
+    except ValueError:
+        return {}
 
 
 def get_local_chat_models():

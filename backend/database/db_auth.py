@@ -9,7 +9,7 @@ from db_enums import PaidUserStatus
 from flask_mail import Message
 from constants.global_constants import productHashMap
 from constants.global_constants import priceToPaymentPlan
-from constants.global_constants import dbName, dbHost, dbUser, dbPassword
+from constants.global_constants import dbName, dbHost, dbUser, dbPassword, localDbRootPassword, localDbSocketPassword
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -49,7 +49,7 @@ def get_db_connection():
             # print("in daniel location")
             conn = mysql.connector.connect(
                 user='root',
-                password='1165205407',
+                password=localDbRootPassword,
                 host='localhost',
                 port=3306,
                 database=dbName
@@ -57,7 +57,7 @@ def get_db_connection():
         else:
             conn = mysql.connector.connect(
                 user='root',
-                password='23072004',
+                password=localDbSocketPassword,
                 unix_socket='/tmp/mysql.sock',
                 database=dbName,
             )

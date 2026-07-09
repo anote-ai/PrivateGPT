@@ -8,7 +8,7 @@ This file provides context for AI assistants working in this repository.
 
 **PrivateGPT** is a cross-platform desktop application built with Electron that delivers a private, financial AI assistant. It supports:
 
-- Local LLM inference via Ollama (Llama2, Mistral)
+- Local LLM inference via Ollama, using a model registry (`backend/local_models.py`) — defaults to Qwen 3 8B / Llama 3.1 8B, with a lightweight Qwen 2.5 3B option for machines with 8GB RAM or less
 - OpenAI API integration
 - PDF document ingestion with semantic search (via Chroma vector DB)
 - SEC/EDGAR financial filings integration
@@ -70,7 +70,7 @@ PrivateGPT/
 | Language | Python 3.x |
 | Primary DB | SQLite3 (local), MySQL (production) |
 | Vector DB | Chroma (parquet-based embeddings in `backend/db/`) |
-| LLM (local) | Ollama (llama2, mistral) |
+| LLM (local) | Ollama, model registry in `backend/local_models.py` (default: qwen3:8b / llama3.1:8b; qwen2.5:3b for 8GB RAM) |
 | LLM (cloud) | OpenAI API |
 | Document processing | PyPDF2 |
 | Financial data | sec_api (SEC EDGAR) |
@@ -140,9 +140,10 @@ npm run package_prod         # Production build
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/check-models` | Check if Ollama models are installed |
-| POST | `/install-llama` | Install Llama2 via Ollama |
-| POST | `/install-mistral` | Install Mistral via Ollama |
+| POST | `/local-models` | List registered local models and their install status |
+| POST | `/check-models` | Check if the configured local models are installed (includes legacy fields) |
+| POST | `/install-local-model` | Pull the requested local model via Ollama |
+| POST | `/local-model-status` | Poll install/download progress for a local model |
 | POST | `/create-chat` | Create new chat session |
 | GET | `/get-chats` | Retrieve user's chats |
 | PUT | `/update-chat` | Update chat name |

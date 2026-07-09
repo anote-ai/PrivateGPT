@@ -9,7 +9,6 @@ import requests
 import PyPDF2
 import sys
 from dotenv import load_dotenv
-from local_models import LOCAL_EMBEDDING_MODEL, normalize_model_type
 
 try:
     import openai
@@ -27,6 +26,8 @@ except ImportError:
 
 load_dotenv()
 
+from local_models import LOCAL_EMBEDDING_MODEL, get_ollama_options, normalize_model_type
+
 sec_api_key = os.getenv("SEC_API_KEY", "")
 
 
@@ -42,15 +43,29 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
 
+SCHEMA_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'schema.sql')
+
+
+def init_db_if_needed(conn, cursor):
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chats'")
+    if cursor.fetchone() is not None:
+        return
+
+    with open(SCHEMA_PATH, 'r') as schema_file:
+        conn.executescript(schema_file.read())
+    conn.commit()
+
+
 def get_db_connection():
     #application_path = get_application_path()
     #db_path = os.path.join(application_path, 'appdist', 'database.db') #get error unable to open db file
     #db_path = os.path.join(application_path, 'database.db')
     db_path = os.environ.get('DB_PATH', './database.db')
-    
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = dict_factory
     cursor = conn.cursor()
+    init_db_if_needed(conn, cursor)
 
     return conn, cursor
 
@@ -330,7 +345,7 @@ def generate_local_embeddings(inputs):
         return []
 
     if hasattr(ollama, "embed"):
-        response = ollama.embed(model=LOCAL_EMBEDDING_MODEL, input=inputs)
+        response = ollama.embed(model=LOCAL_EMBEDDING_MODEL, input=inputs, options=get_ollama_options())
         vectors = [np.array(vector, dtype=np.float32) for vector in _extract_embedding_list(response)]
         if len(vectors) != len(inputs):
             raise RuntimeError(
@@ -340,7 +355,7 @@ def generate_local_embeddings(inputs):
 
     vectors = []
     for item in inputs:
-        response = ollama.embeddings(model=LOCAL_EMBEDDING_MODEL, prompt=item)
+        response = ollama.embeddings(model=LOCAL_EMBEDDING_MODEL, prompt=item, options=get_ollama_options())
         extracted = _extract_embedding_list(response)
         if extracted:
             vectors.append(np.array(extracted[0], dtype=np.float32))

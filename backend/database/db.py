@@ -6,7 +6,7 @@ from constants.global_constants import kSessionTokenExpirationTime, kPasswordRes
 from db_enums import PaidUserStatus
 from dateutil.relativedelta import relativedelta
 from constants.global_constants import chatgptLimit
-from constants.global_constants import dbName, dbHost, dbUser, dbPassword
+from constants.global_constants import dbName, dbHost, dbUser, dbPassword, localDbRootPassword
 import socket
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +18,7 @@ def get_db_connection():
             # print("in daniel location")
             conn = mysql.connector.connect(
                 user='root',
-                password='1165205407',
+                password=localDbRootPassword,
                 host='localhost',
                 port=3306,
                 database=dbName

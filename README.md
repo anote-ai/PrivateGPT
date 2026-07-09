@@ -27,6 +27,20 @@ Notes:
 - `OPENAI_API_KEY` is optional, but translation and chat-level OpenAI fallback need either this env var or a saved key in the app settings.
 - If `ollama` is not on your shell `PATH`, set `OLLAMA_PATH` in `backend/.env`.
 
+### Install Ollama
+1. Download Ollama for Mac directly from https://ollama.com/download. (Note: `brew install ollama` pulls in Apple's `mlx` as a build dependency, which requires macOS Sonoma (14+) — it will fail to install on Ventura (13) or older. Use the direct download instead on older macOS.)
+
+2. The app manages local models through a registry in `backend/local_models.py`. Defaults are `qwen3:8b` and `llama3.1:8b`; a lighter `qwen2.5:3b` option is also available for machines with 8GB RAM or less. Pick a model in the app's Settings/Installation UI and it will run `ollama pull <model>` for you, or pull manually:
+`ollama pull qwen2.5:3b` (recommended for 8GB RAM)
+`ollama pull qwen3:8b` (default, needs more RAM)
+
+3. Also pull the embedding model used for document search:
+`ollama pull embeddinggemma`
+
+4. To change the default model without using the UI, set `DEFAULT_LOCAL_CHAT_MODEL_TYPE` in `backend/.env` (see `backend/.env.example`) to the index of the model in `LOCAL_CHAT_MODELS`.
+
+5. **macOS 12/13 (Ventura or older) known issue:** local inference can crash with `GGML_ASSERT(buf_dst) failed` — a llama.cpp Metal/GPU bug on older macOS (see [ggml-org/llama.cpp#16266](https://github.com/ggml-org/llama.cpp/issues/16266)), independent of which model you pick. Workaround: set `OLLAMA_NUM_GPU=0` in `backend/.env` to force CPU-only inference (slower, but stable). This is fixed by upgrading to macOS Sonoma (14+).
+
 ### 2. Frontend
 
 ```bash

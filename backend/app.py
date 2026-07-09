@@ -17,7 +17,7 @@ from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_
                                                         reset_chat_db, change_chat_mode_db, add_message_to_db, get_relevant_chunks, add_sources_to_db, add_model_key_to_db, \
                                                         check_valid_api, reset_uploaded_docs, add_ticker_to_chat_db, download_10K_url_ticker, download_filing_as_pdf, \
                                                         get_text_from_single_file, translate_text, TRANSLATION_API_KEY_REQUIRED_MESSAGE
-from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fallback_chat_models, get_local_chat_models, resolve_chat_model
+from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fallback_chat_models, get_local_chat_models, get_ollama_options, resolve_chat_model
 
 
 #load_dotenv()
@@ -595,10 +595,10 @@ def process_message_pdf():
             response = ollama.chat(model=local_model["tag"], messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_prompt},
-            ])
+            ], options=get_ollama_options())
             answer = response['message']['content']
-        except Exception:
-            return json_error(f"Error with {local_model['label']}", status_code=500)
+        except Exception as e:
+            return json_error(f"Error with {local_model['label']}: {e}", status_code=500)
 
     #This adds bot message
     message_id = add_message_to_db(answer, chat_id, 0)
@@ -724,7 +724,7 @@ def infer_chat_name():
 
     for model in models_to_try:
         try:
-            response = ollama.chat(model=model, messages=prompt_msg)
+            response = ollama.chat(model=model, messages=prompt_msg, options=get_ollama_options())
             chat_name = response['message']['content'].strip()[:60]
             break
         except Exception:

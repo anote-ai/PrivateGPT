@@ -95,11 +95,7 @@ function HomeChatbot() {
         return;
       }
 
-      setIsPrivate((currentModelType) =>
-        localModelState.models.some((model) => model.id === currentModelType)
-          ? currentModelType
-          : localModelState.defaultModelType
-      );
+      setIsPrivate(localModelState.defaultModelType);
     };
 
     loadInitialState();

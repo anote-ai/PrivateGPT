@@ -13,6 +13,8 @@ function useLocalModelInstallation({ modelType, onInstalled }) {
   const [installError, setInstallError] = useState("");
   const installPollTimeoutRef = useRef(null);
 
+  const normalizeInstallError = (value) => (typeof value === "string" ? value : "");
+
   const clearPendingPoll = () => {
     if (installPollTimeoutRef.current) {
       clearTimeout(installPollTimeoutRef.current);
@@ -43,7 +45,7 @@ function useLocalModelInstallation({ modelType, onInstalled }) {
   };
 
   const openInstallationModal = (errorMessage = "") => {
-    setInstallError(errorMessage);
+    setInstallError(normalizeInstallError(errorMessage));
     setShowInstallationModal(true);
   };
 

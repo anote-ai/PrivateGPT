@@ -11,6 +11,7 @@ Tests for chat management endpoints:
 import json
 import pytest
 from unittest.mock import patch, MagicMock
+from api_endpoints.financeGPT.chatbot_endpoints import get_next_default_chat_name
 
 
 # ---------------------------------------------------------------------------
@@ -33,22 +34,35 @@ class TestCreateNewChat:
     def test_creates_chat_returns_id(self, client):
         with patch(
             "api_endpoints.financeGPT.chatbot_endpoints.add_chat_to_db",
-            return_value=42,
+            return_value=(42, "Chat 1"),
         ):
             resp = _post(client, "/create-new-chat", {"chat_type": 0, "model_type": 0})
         assert resp.status_code == 200
         data = resp.get_json()
         assert "chat_id" in data
         assert data["chat_id"] == 42
+        assert data["chat_name"] == "Chat 1"
 
     def test_creates_edgar_chat(self, client):
         with patch(
             "api_endpoints.financeGPT.chatbot_endpoints.add_chat_to_db",
-            return_value=7,
+            return_value=(7, "Chat 2"),
         ):
             resp = _post(client, "/create-new-chat", {"chat_type": 1, "model_type": 1})
         assert resp.status_code == 200
         assert resp.get_json()["chat_id"] == 7
+        assert resp.get_json()["chat_name"] == "Chat 2"
+
+
+class TestDefaultChatNaming:
+    def test_starts_from_chat_1(self):
+        assert get_next_default_chat_name([]) == "Chat 1"
+
+    def test_reuses_first_available_chat_number(self):
+        assert get_next_default_chat_name(["Chat 2", "Chat 4", "Quarterly Review"]) == "Chat 1"
+
+    def test_fills_deleted_chat_gap(self):
+        assert get_next_default_chat_name(["Chat 1", "Chat 3"]) == "Chat 2"
 
 
 # ---------------------------------------------------------------------------

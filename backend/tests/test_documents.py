@@ -140,6 +140,9 @@ class TestIngestFiles:
     def test_ingest_single_file_success(self, client):
         fake_text = "Annual revenue was $5 billion."
         with patch(
+            "app.is_model_installed",
+            return_value=True,
+        ), patch(
             "app.get_text_from_single_file", return_value=fake_text
         ), patch(
             "api_endpoints.financeGPT.chatbot_endpoints.add_document_to_db",
@@ -156,6 +159,9 @@ class TestIngestFiles:
     def test_ingest_skips_existing_document(self, client):
         """If the document already exists (doesExist=True) chunking is skipped."""
         with patch(
+            "app.is_model_installed",
+            return_value=True,
+        ), patch(
             "app.get_text_from_single_file", return_value="Some text"
         ), patch(
             "api_endpoints.financeGPT.chatbot_endpoints.add_document_to_db",
@@ -170,11 +176,21 @@ class TestIngestFiles:
         mock_chunk.assert_not_called()
 
     def test_rejects_non_pdf_uploads(self, client):
-        resp = self._make_pdf_upload(
-            client, 1, "test-token", "notes.txt", b"plain text content"
-        )
+        with patch("app.is_model_installed", return_value=True):
+            resp = self._make_pdf_upload(
+                client, 1, "test-token", "notes.txt", b"plain text content"
+            )
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "Only PDF uploads are supported right now."
+
+    def test_returns_helpful_error_when_embedding_model_missing(self, client):
+        with patch("app.is_model_installed", return_value=False):
+            resp = self._make_pdf_upload(
+                client, 1, "test-token", "report.pdf", b"%PDF-1.4 fake content"
+            )
+
+        assert resp.status_code == 503
+        assert "embedding model" in resp.get_json()["error"]
 
 
 # ---------------------------------------------------------------------------

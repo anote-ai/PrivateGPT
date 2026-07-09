@@ -123,7 +123,7 @@ function HomeChatbot() {
       const responseData = await response.json();
       const chatSummary = {
         id: responseData.chat_id,
-        chat_name: `Chat ${responseData.chat_id}`,
+        chat_name: responseData.chat_name || `Chat ${responseData.chat_id}`,
         associated_task: taskOverride,
         model_type: modelOverride,
         ticker: "",

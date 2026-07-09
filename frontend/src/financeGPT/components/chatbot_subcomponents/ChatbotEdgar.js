@@ -27,6 +27,7 @@ const ChatbotEdgar = (props) => {
   const messagesEndRef = useRef(null);
 
   const [isValidTicker, setIsValidTicker] = useState(false);
+  const [tickerValidationError, setTickerValidationError] = useState("");
   const [showEditModal, setShowEditModal] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -224,13 +225,25 @@ const ChatbotEdgar = (props) => {
   };
 
   const checkTickerValidity = async (inputTicker) => {
-    const response = await fetcher("check-valid-ticker", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ ticker: inputTicker }),
-    });
-    const data = await response.json();
-    setIsValidTicker(data.isValid);
+    if (!inputTicker) {
+      setIsValidTicker(false);
+      setTickerValidationError("");
+      return;
+    }
+
+    try {
+      const response = await fetcher("check-valid-ticker", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: inputTicker }),
+      });
+      const data = await response.json();
+      setIsValidTicker(Boolean(data.isValid));
+      setTickerValidationError(data.error || "");
+    } catch (error) {
+      setIsValidTicker(false);
+      setTickerValidationError(error.message || "Ticker validation is unavailable right now.");
+    }
   };
 
   const handleTickerChange = (e) => {
@@ -270,6 +283,13 @@ const ChatbotEdgar = (props) => {
     } catch (error) {
       console.error("Error processing ticker:", error);
       showError(error.message || "Unable to process that ticker right now.", "Ticker load failed");
+      if (
+        error?.status === 503 ||
+        String(error?.message || "").includes("Ollama") ||
+        String(error?.message || "").includes("embedding model")
+      ) {
+        openInstallationModal(error.message);
+      }
     } finally {
       setIsUploading(false);
       props.handleForceUpdate(true);
@@ -390,7 +410,9 @@ const ChatbotEdgar = (props) => {
         </div>
         {props.ticker && (
           <div className="mt-1 text-xs">
-            {isValidTicker ? (
+            {tickerValidationError ? (
+              <span className="text-amber-300">{tickerValidationError}</span>
+            ) : isValidTicker ? (
               <span className="text-green-400">✓ Valid ticker — ready to load</span>
             ) : (
               <span className="text-red-400">✗ Ticker not found</span>

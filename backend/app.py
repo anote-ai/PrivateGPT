@@ -76,10 +76,37 @@ def is_model_installed(model_tag):
     return os.path.exists(model_path) or os.path.isdir(model_dir)
 
 
+def local_runtime_required_message(feature_label="This feature"):
+    return (
+        f"{feature_label} requires Ollama plus the local embedding model "
+        f"({LOCAL_EMBEDDING_MODEL}). Install a local model in Settings after installing Ollama, then try again."
+    )
+
+
+def is_local_embedding_ready():
+    return is_model_installed(LOCAL_EMBEDDING_MODEL)
+
+
+def ensure_local_embedding_ready(feature_label="This feature"):
+    if is_local_embedding_ready():
+        return None
+
+    return json_error(
+        local_runtime_required_message(feature_label),
+        status_code=503,
+        code="local_embedding_unavailable",
+    )
+
+
+def is_model_ready(model):
+    return is_model_installed(model["tag"]) and is_local_embedding_ready()
+
+
 def serialize_model(model):
     return {
         **model,
-        "installed": is_model_installed(model["tag"]),
+        "installed": is_model_ready(model),
+        "chat_model_installed": is_model_installed(model["tag"]),
     }
 
 
@@ -111,6 +138,7 @@ def build_local_models_response(include_legacy_keys=False):
         "models": models,
         "default_model_type": DEFAULT_CHAT_MODEL_TYPE,
         "embedding_model": LOCAL_EMBEDDING_MODEL,
+        "embedding_model_installed": is_model_installed(LOCAL_EMBEDDING_MODEL),
     }
 
     if include_legacy_keys:
@@ -158,45 +186,85 @@ def check_models():
     return jsonify(build_local_models_response(include_legacy_keys=True))
 
 
-def run_model_pull_async(model, ollama_path):
-    command = [ollama_path, 'pull', model["tag"]]
-    process_status = process_status_by_model[model["id"]]
-
-    # Regular expression to match the time left message format
+def stream_model_pull(command, process_status, progress_offset, progress_weight, label):
     time_left_regex = re.compile(r'\b\d+m\d+s\b')
     progress_regex = re.compile(r'(\d+)%')
 
-    try:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        output_lines = []
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    output_lines = []
 
-        # Monitor the process output in real-time
-        for line in iter(process.stdout.readline, ''):
-            output_lines.append(line.strip())
+    for line in iter(process.stdout.readline, ''):
+        stripped_line = line.strip()
+        if stripped_line:
+            output_lines.append(f"[{label}] {stripped_line}")
             process_status["output"] = "\n".join(output_lines[-20:])
-            match = time_left_regex.search(line)
-            if match:
-                process_status["time_left"] = match.group()
 
-            match_progress = progress_regex.search(line)
-            if match_progress:
-                process_status["progress"] = int(match_progress.group(1))
+        match = time_left_regex.search(line)
+        if match:
+            process_status["time_left"] = f"{label}: {match.group()}"
 
-        return_code = process.wait()  # Wait for the process to complete
+        match_progress = progress_regex.search(line)
+        if match_progress:
+            stage_progress = int(match_progress.group(1))
+            total_progress = progress_offset + (stage_progress * progress_weight / 100)
+            process_status["progress"] = min(99, int(total_progress))
+
+    return process.wait()
+
+
+def run_model_pull_async(model, ollama_path):
+    process_status = process_status_by_model[model["id"]]
+    install_targets = []
+
+    if not is_model_installed(model["tag"]):
+        install_targets.append(model)
+
+    if LOCAL_EMBEDDING_MODEL != model["tag"] and not is_model_installed(LOCAL_EMBEDDING_MODEL):
+        install_targets.append({
+            "tag": LOCAL_EMBEDDING_MODEL,
+            "label": f"{LOCAL_EMBEDDING_MODEL} embeddings",
+        })
+
+    try:
+        if not install_targets:
+            process_status["running"] = False
+            process_status["completed"] = True
+            process_status["time_left"] = ""
+            process_status["error"] = ""
+            process_status["progress"] = 100
+            return
+
+        stage_count = len(install_targets)
+        for stage_index, install_target in enumerate(install_targets):
+            progress_offset = int(100 * stage_index / stage_count)
+            progress_weight = 100 / stage_count
+            return_code = stream_model_pull(
+                [ollama_path, 'pull', install_target["tag"]],
+                process_status,
+                progress_offset,
+                progress_weight,
+                install_target["label"],
+            )
+
+            if return_code != 0:
+                process_status["running"] = False
+                process_status["completed"] = True
+                process_status["time_left"] = ""
+                process_status["error"] = (
+                    process_status["output"] or f"Ollama exited with status {return_code}."
+                )
+                return
+
         process_status["running"] = False
         process_status["completed"] = True
         process_status["time_left"] = ""
-
-        if return_code == 0:
-            process_status["error"] = ""
-            process_status["progress"] = 100
-        else:
-            process_status["error"] = process_status["output"] or f"Ollama exited with status {return_code}."
+        process_status["error"] = ""
+        process_status["progress"] = 100
     except Exception as e:
         process_status["running"] = False
         process_status["completed"] = True
@@ -227,7 +295,10 @@ def start_model_install(model_type):
     if not ollama_path:
         process_status.update(create_process_status())
         process_status["completed"] = True
-        process_status["error"] = "Ollama CLI not found. Install Ollama or set OLLAMA_PATH to the executable."
+        process_status["error"] = (
+            "Ollama CLI not found. Local model downloads run on your machine, so install Ollama "
+            "or set OLLAMA_PATH to the executable first."
+        )
         return jsonify({
             "success": False,
             "message": process_status["error"],
@@ -311,9 +382,9 @@ def create_new_chat():
     chat_type = payload_value('chat_type')
     model_type = payload_value('model_type')
 
-    chat_id = add_chat_to_db(chat_type, model_type) #for now hardcode the model type as being 0
+    chat_id, chat_name = add_chat_to_db(chat_type, model_type) #for now hardcode the model type as being 0
 
-    return jsonify(chat_id=chat_id)
+    return jsonify(chat_id=chat_id, chat_name=chat_name)
 
 
 @app.route('/retrieve-all-chats', methods=['POST'])
@@ -393,15 +464,26 @@ def ingest_files(chat_id, upload_token):
     if not files:
         return json_error("At least one PDF file is required.")
 
-    for file in files:
-        filename = file.filename or ""
-        if not filename.lower().endswith(".pdf"):
-            return json_error("Only PDF uploads are supported right now.")
+    embedding_ready_error = ensure_local_embedding_ready("Document upload")
+    if embedding_ready_error:
+        return embedding_ready_error
 
-        text = get_text_from_single_file(file)
-        doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
-        if not doesExist:
-            chunk_document(text, MAX_CHUNK_SIZE, doc_id)
+    try:
+        for file in files:
+            filename = file.filename or ""
+            if not filename.lower().endswith(".pdf"):
+                return json_error("Only PDF uploads are supported right now.")
+
+            text = get_text_from_single_file(file)
+            doc_id, doesExist = add_document_to_db(text, filename, chat_id=chat_id)
+            if not doesExist:
+                chunk_document(text, MAX_CHUNK_SIZE, doc_id)
+    except Exception as error:
+        return json_error(
+            "Unable to index the uploaded PDF. Please verify Ollama is installed and running, then try again.",
+            status_code=500,
+            details=str(error),
+        )
 
     return json_success(status="success")
 
@@ -551,8 +633,11 @@ def check_valid_ticker():
    if not ticker:
        return jsonify({'isValid': False})
 
-   result = check_valid_api(ticker)
-   return jsonify({'isValid': result})
+   try:
+       result = check_valid_api(ticker)
+       return jsonify({'isValid': result})
+   except Exception as error:
+       return jsonify({'isValid': False, 'error': str(error)}), 503
 
 @app.route('/add-ticker-to-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
@@ -582,22 +667,39 @@ def process_ticker_info():
     if not ticker:
         return jsonify({"error": "Ticker is required."}), 400
 
+    embedding_ready_error = ensure_local_embedding_ready("Ticker analysis")
+    if embedding_ready_error:
+        return embedding_ready_error
+
     MAX_CHUNK_SIZE = 1000
+    filename = None
 
-    reset_uploaded_docs(chat_id)
+    try:
+        reset_uploaded_docs(chat_id)
 
-    url, ticker = download_10K_url_ticker(ticker)
-    filename = download_filing_as_pdf(url, ticker)
+        url, ticker = download_10K_url_ticker(ticker)
+        if not url or not ticker:
+            return json_error("We couldn't find a recent 10-K filing for that ticker.", status_code=404)
 
-    text = get_text_from_single_file(filename)
+        filename = download_filing_as_pdf(url, ticker)
+        text = get_text_from_single_file(filename)
 
-    doc_id, doesExist = add_document_to_db(text, filename, chat_id)
+        doc_id, doesExist = add_document_to_db(text, filename, chat_id)
 
-    if not doesExist:
-        chunk_document(text, MAX_CHUNK_SIZE, doc_id)
+        if not doesExist:
+            chunk_document(text, MAX_CHUNK_SIZE, doc_id)
 
-    if os.path.exists(filename):
-        os.remove(filename)
+        if os.path.exists(filename):
+            os.remove(filename)
+    except Exception as error:
+        return json_error(
+            "Unable to prepare this 10-K filing right now. Please verify Ollama is installed and running, then try again.",
+            status_code=500,
+            details=str(error),
+        )
+    finally:
+        if filename and os.path.exists(filename):
+            os.remove(filename)
 
     return jsonify({"status": "success"}), 200
 

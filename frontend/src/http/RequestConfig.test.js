@@ -63,6 +63,20 @@ describe("RequestConfig", () => {
     });
   });
 
+  test("fetcher collapses html error pages into a readable message", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: { get: () => "text/html" },
+      text: async () => "<!doctype html><html><body><h1>500 Internal Server Error</h1></body></html>",
+    });
+
+    await expect(fetcher("ingest-files/1/demo", { method: "POST" })).rejects.toMatchObject({
+      message: "The server hit an internal error while processing this request.",
+      status: 500,
+    });
+  });
+
   test("getFilenameFromResponse reads content-disposition", () => {
     const response = {
       headers: {

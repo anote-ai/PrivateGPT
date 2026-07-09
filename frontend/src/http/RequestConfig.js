@@ -70,6 +70,25 @@ export async function downloadResponseAsFile(response, fallbackFilename = "downl
   window.URL.revokeObjectURL(url);
 }
 
+function sanitizeTextErrorMessage(text, status) {
+  const trimmedText = String(text || "").trim();
+
+  if (!trimmedText) {
+    return `Request failed with status ${status}`;
+  }
+
+  const looksLikeHtml = /^<!doctype html>/i.test(trimmedText) || /^<html/i.test(trimmedText);
+  if (looksLikeHtml) {
+    if (status >= 500) {
+      return "The server hit an internal error while processing this request.";
+    }
+
+    return `Request failed with status ${status}`;
+  }
+
+  return trimmedText.replace(/<[^>]+>/g, "").trim() || `Request failed with status ${status}`;
+}
+
 async function buildRequestError(response) {
   let message = `Request failed with status ${response.status}`;
   let errorPayload = null;
@@ -82,7 +101,7 @@ async function buildRequestError(response) {
     } else {
       const text = await response.text();
       if (text.trim()) {
-        message = text;
+        message = sanitizeTextErrorMessage(text, response.status);
       }
     }
   } catch (error) {

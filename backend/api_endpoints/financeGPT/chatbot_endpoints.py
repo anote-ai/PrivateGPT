@@ -1,6 +1,7 @@
 import sqlite3
 import os
-import openai
+import re
+from datetime import datetime
 import numpy as np
 import ollama
 from sec_api import QueryApi, RenderApi
@@ -8,6 +9,20 @@ import requests
 import PyPDF2
 import sys
 from dotenv import load_dotenv
+
+try:
+    import openai
+except ImportError:
+    class _MissingOpenAIClient:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError(
+                "The openai package is required for translation and OpenAI-backed chat features."
+            )
+
+    class _MissingOpenAI:
+        OpenAI = _MissingOpenAIClient
+
+    openai = _MissingOpenAI()
 
 load_dotenv()
 
@@ -17,6 +32,9 @@ sec_api_key = os.getenv("SEC_API_KEY", "")
 
 
 USER_ID = 1
+TRANSLATION_API_KEY_REQUIRED_MESSAGE = "Translation requires an OpenAI API key. Please add one in Settings."
+DEFAULT_CHAT_NAME_PATTERN = re.compile(r"^Chat\s+(\d+)$", re.IGNORECASE)
+DEFAULT_10K_LOOKBACK_YEARS = int(os.getenv("SEC_10K_LOOKBACK_YEARS", "5"))
 
 
 def dict_factory(cursor, row):
@@ -51,22 +69,47 @@ def get_db_connection():
 
     return conn, cursor
 
+
+def get_next_default_chat_name(existing_names):
+    used_numbers = set()
+
+    for name in existing_names or []:
+        if not isinstance(name, str):
+            continue
+
+        match = DEFAULT_CHAT_NAME_PATTERN.fullmatch(name.strip())
+        if match:
+            used_numbers.add(int(match.group(1)))
+
+    next_number = 1
+    while next_number in used_numbers:
+        next_number += 1
+
+    return f"Chat {next_number}"
+
+
+def get_next_default_chat_name_for_user(cursor, user_id):
+    cursor.execute("SELECT chat_name FROM chats WHERE user_id = ?", (user_id,))
+    existing_names = [row["chat_name"] for row in cursor.fetchall()]
+    return get_next_default_chat_name(existing_names)
+
 ## General for all chatbots
 # Chat_type is an integer where 0=chatbot, 1=Edgar, 2=PDFUploader, etc
 def add_chat_to_db(chat_type, model_type): #intake the current userID and the model type into the chat table
     conn, cursor = get_db_connection()
     normalized_model_type = normalize_model_type(model_type)
+    chat_name = get_next_default_chat_name_for_user(cursor, USER_ID)
 
-    cursor.execute('INSERT INTO chats (user_id, model_type, associated_task) VALUES (?, ?, ?)', (USER_ID, normalized_model_type, chat_type))
+    cursor.execute(
+        'INSERT INTO chats (user_id, model_type, associated_task, chat_name) VALUES (?, ?, ?, ?)',
+        (USER_ID, normalized_model_type, chat_type, chat_name)
+    )
     chat_id = cursor.lastrowid
-
-    name = f"Chat {chat_id}"
-    cursor.execute('UPDATE chats SET chat_name = ? WHERE id = ?', (name, chat_id))
 
     conn.commit()
     conn.close() 
 
-    return chat_id
+    return chat_id, chat_name
 
 def update_chat_name_db(chat_id, new_name):
     conn, cursor = get_db_connection()
@@ -533,58 +576,54 @@ def add_model_key_to_db(model_key, chat_id, user_email=None):
 #For edgar
 queryApi = QueryApi(api_key=sec_api_key)
 
-def check_valid_api(ticker):
-    print("IN CHECK_VALID_API: ", ticker)
-    year = 2023
 
+def build_10k_query(ticker):
+    current_year = datetime.now().year
+    start_year = current_year - DEFAULT_10K_LOOKBACK_YEARS
     ticker_query = 'ticker:({})'.format(ticker)
-    query_string = '{ticker_query} AND filedAt:[{year}-01-01 TO {year}-12-31] AND formType:"10-K" AND NOT formType:"10-K/A" AND NOT formType:NT'.format(ticker_query=ticker_query, year=year)
+    query_string = (
+        '{ticker_query} AND filedAt:[{start_year}-01-01 TO {current_year}-12-31] '
+        'AND formType:"10-K" AND NOT formType:"10-K/A" AND NOT formType:NT'
+    ).format(
+        ticker_query=ticker_query,
+        start_year=start_year,
+        current_year=current_year,
+    )
 
-    query = {
-        "query": { "query_string": {
+    return {
+        "query": {"query_string": {
             "query": query_string,
-            "time_zone": "America/New_York"
-        } },
+            "time_zone": "America/New_York",
+        }},
         "from": "0",
         "size": "200",
-        "sort": [{ "filedAt": { "order": "desc" } }]
-      }
+        "sort": [{"filedAt": {"order": "desc"}}],
+    }
 
 
-    response = queryApi.get_filings(query)
+def get_latest_10k_filing(ticker):
+    if not sec_api_key:
+        raise RuntimeError("SEC_API_KEY is not configured on the backend.")
 
-    filings = response['filings']
+    response = queryApi.get_filings(build_10k_query(ticker))
+    filings = response.get('filings', [])
 
     if not filings:
-        return False
-    else:
-        return True
+        return None
+
+    return filings[0]
+
+def check_valid_api(ticker):
+    print("IN CHECK_VALID_API: ", ticker)
+    return get_latest_10k_filing(ticker) is not None
     
 
 def download_10K_url_ticker(ticker):
-    year = 2023
+    filing = get_latest_10k_filing(ticker)
 
-    ticker_query = 'ticker:({})'.format(ticker)
-    query_string = '{ticker_query} AND filedAt:[{year}-01-01 TO {year}-12-31] AND formType:"10-K" AND NOT formType:"10-K/A" AND NOT formType:NT'.format(ticker_query=ticker_query, year=year)
-
-    query = {
-        "query": { "query_string": {
-            "query": query_string,
-            "time_zone": "America/New_York"
-        } },
-        "from": "0",
-        "size": "200",
-        "sort": [{ "filedAt": { "order": "desc" } }]
-      }
-
-
-    response = queryApi.get_filings(query)
-
-    filings = response['filings']
-
-    if filings:
-       ticker=filings[0]['ticker']
-       url=filings[0]['linkToFilingDetails']
+    if filing:
+       ticker=filing['ticker']
+       url=filing['linkToFilingDetails']
     else:
        ticker = None
        url = None
@@ -645,7 +684,7 @@ def translate_text(text, source_language, target_language, model_key=None):
     else:
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
-            return f"[Translation requires an OpenAI API key. Please add one in Settings.]\n\nOriginal text: {text}"
+            return f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]\n\nOriginal text: {text}"
         client = openai.OpenAI(api_key=api_key)
 
     source_desc = f"from {source_language}" if source_language and source_language != "Auto-detect" else ""

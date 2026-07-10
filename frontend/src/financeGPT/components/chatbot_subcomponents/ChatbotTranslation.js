@@ -184,6 +184,8 @@ const ChatbotTranslation = (props) => {
     e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
   };
 
+  const hasChatSpecificKey = Boolean(props.confirmedModelKey?.trim());
+
   return (
     <div className="min-h-[90vh] h-[90vh] mt-2 relative bg-[#12141E] p-4 w-full rounded-2xl border border-gray-800 flex flex-col">
       {/* Header */}
@@ -221,6 +223,16 @@ const ChatbotTranslation = (props) => {
             <option key={l.code} value={l.code}>{l.label}</option>
           ))}
         </select>
+      </div>
+
+      <div className={`mb-3 rounded-xl border px-3 py-2 text-xs ${
+        hasChatSpecificKey
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+          : "border-amber-500/30 bg-amber-500/10 text-amber-100"
+      }`}>
+        {hasChatSpecificKey
+          ? "This chat has a saved OpenAI API key, so translations will use that key."
+          : "Translation uses the backend OPENAI_API_KEY when available. If this environment is not configured, save a chat-specific key from Settings in the left sidebar."}
       </div>
 
       {/* Chat / Translation history */}

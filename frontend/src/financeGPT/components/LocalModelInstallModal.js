@@ -12,7 +12,12 @@ function LocalModelInstallModal({
   timeLeft,
 }) {
   const title = isLoading ? "Installing Model..." : `Install ${modelName}`;
-  const bodyText = error || `You have not installed ${modelName}. Please install it to use local inference.`;
+  const isOllamaMissing = typeof error === "string" && error.includes("Ollama CLI not found");
+  const bodyText = error
+    ? (isOllamaMissing
+      ? "Local model downloads run on your machine through Ollama. Install Ollama first, then retry here."
+      : error)
+    : `You have not installed ${modelName}. This setup also installs the local embedding model needed for PDF upload and ticker analysis.`;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title}>

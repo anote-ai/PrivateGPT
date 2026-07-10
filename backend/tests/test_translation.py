@@ -18,6 +18,7 @@ Demo use cases:
 import json
 import pytest
 from unittest.mock import patch, MagicMock
+from api_endpoints.financeGPT.chatbot_endpoints import TRANSLATION_API_KEY_REQUIRED_MESSAGE
 
 
 def _post(client, url, payload=None):
@@ -54,7 +55,7 @@ class TestTranslateTextUnit:
         mock_client.chat.completions.create.return_value = _mock_openai_response(
             "Los ingresos anuales fueron de 5.000 millones de dólares."
         )
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(
                 "Annual revenue was $5 billion.",
                 source_language="English",
@@ -70,7 +71,7 @@ class TestTranslateTextUnit:
         mock_client.chat.completions.create.return_value = _mock_openai_response(
             "Le chiffre d'affaires annuel était de 5 milliards de dollars."
         )
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(
                 "Annual revenue was $5 billion.",
                 source_language="English",
@@ -85,7 +86,7 @@ class TestTranslateTextUnit:
         japanese_text = "年間収益は50億ドルでした。"
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _mock_openai_response(japanese_text)
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(
                 "Annual revenue was $5 billion.",
                 source_language="English",
@@ -100,7 +101,7 @@ class TestTranslateTextUnit:
         arabic_text = "بلغت الإيرادات السنوية 5 مليارات دولار."
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _mock_openai_response(arabic_text)
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(
                 "Annual revenue was $5 billion.",
                 source_language="English",
@@ -116,7 +117,7 @@ class TestTranslateTextUnit:
         mock_client.chat.completions.create.return_value = _mock_openai_response(
             "Der Jahresumsatz betrug 5 Milliarden Dollar."
         )
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(
                 "Annual revenue was $5 billion.",
                 source_language="Auto-detect",
@@ -140,7 +141,7 @@ class TestTranslateTextUnit:
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _mock_openai_response(translated)
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(
                 long_text,
                 source_language="English",
@@ -157,7 +158,7 @@ class TestTranslateTextUnit:
         translated = "El margen EBITDA mejoró en 200 puntos básicos y la relación P/E es ahora de 18x."
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _mock_openai_response(translated)
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             result = translate_text(source, "English", "Spanish", model_key="sk-test")
         assert "EBITDA" in result or "margen" in result
 
@@ -181,7 +182,7 @@ class TestTranslateTextUnit:
 
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _mock_openai_response("Hola mundo")
-        with patch("openai.OpenAI", return_value=mock_client) as mock_ctor:
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client) as mock_ctor:
             translate_text("Hello world", "English", "Spanish", model_key="sk-custom-key")
         mock_ctor.assert_called_once_with(api_key="sk-custom-key")
 
@@ -191,7 +192,7 @@ class TestTranslateTextUnit:
 
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _mock_openai_response("Bonjour")
-        with patch("openai.OpenAI", return_value=mock_client):
+        with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client):
             translate_text("Hello", "English", "French", model_key="sk-test")
 
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
@@ -228,6 +229,24 @@ class TestTranslateEndpoint:
             "target_language": "French",
         })
         assert resp.status_code == 400
+
+    def test_missing_api_key_returns_400(self, client):
+        with patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.translate_text",
+            return_value=f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]\n\nOriginal text: Hello",
+        ), patch(
+            "app.add_message_to_db"
+        ) as mock_add_message:
+            resp = _post(client, "/translate-text", {
+                "text": "Hello",
+                "source_language": "English",
+                "target_language": "French",
+                "chat_id": 3,
+            })
+
+        assert resp.status_code == 400
+        assert TRANSLATION_API_KEY_REQUIRED_MESSAGE in resp.get_json()["error"]
+        mock_add_message.assert_not_called()
 
     def test_english_to_chinese_endpoint(self, client):
         with patch(

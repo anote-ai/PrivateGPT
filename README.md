@@ -1,29 +1,31 @@
-# Anote-PrivateGPT-Desktop
+# PrivateGPT Desktop
 
-## How to run it locally
-1. Clone the repo `git clone https://github.com/nv78/Anote-PrivateGPT-Desktop` and `cd Anote-PrivateGPT-Desktop`
+PrivateGPT Desktop is an Electron + React + Flask application for chatting with PDFs, analyzing SEC 10-K filings, and running translation workflows with local models or an optional OpenAI API key.
 
-### Backend
-First, compile the backend
-1. `cd backend`
-2. Create a virtual env in 
-`python -m venv venv`
-`source venv/bin/activate` \
-For Windows: use Command Prompt `.\venv\Scripts\Activate`
+## Repository layout
 
-3. Install requirements
-`pip install -r requirements.txt`
+- `frontend/`: React application
+- `backend/`: Flask API, local model orchestration, SQLite-backed chat state
+- `appdist/`: packaged backend binary copied into the Electron build
 
-4. Compile
-`pyinstaller --onefile app.py --add-data "database.db:."`
+## Local development
 
-5. Now, you should have an output in ./backend/dist called app. You will copy this into ./appdist
+### 1. Backend
 
-### Frontend
-1. `cd frontend`
-2. Install dependencies and Build react app
-`npm install --force`
-`npm run build`
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python app.py
+```
+
+Notes:
+
+- `DB_PATH` defaults to `./database.db` for local desktop development.
+- `OPENAI_API_KEY` is optional, but translation and chat-level OpenAI fallback need either this env var or a saved key in the app settings.
+- If `ollama` is not on your shell `PATH`, set `OLLAMA_PATH` in `backend/.env`.
 
 ### Install Ollama
 1. Download Ollama for Mac directly from https://ollama.com/download. (Note: `brew install ollama` pulls in Apple's `mlx` as a build dependency, which requires macOS Sonoma (14+) — it will fail to install on Ventura (13) or older. Use the direct download instead on older macOS.)
@@ -39,51 +41,81 @@ For Windows: use Command Prompt `.\venv\Scripts\Activate`
 
 5. **macOS 12/13 (Ventura or older) known issue:** local inference can crash with `GGML_ASSERT(buf_dst) failed` — a llama.cpp Metal/GPU bug on older macOS (see [ggml-org/llama.cpp#16266](https://github.com/ggml-org/llama.cpp/issues/16266)), independent of which model you pick. Workaround: set `OLLAMA_NUM_GPU=0` in `backend/.env` to force CPU-only inference (slower, but stable). This is fixed by upgrading to macOS Sonoma (14+).
 
-### Running the whole app
-1. In the home directory (/Anote-Private-GPT), you will install dependencies:
-`npm install --force`
+### 2. Frontend
 
-2. Then you will run the app by doing `npm run start`
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm start
+```
 
-## Dev stuff
-To Run the code:
-1. Open backend folder in terminal
-`cd backend`
+The frontend defaults to `http://127.0.0.1:5000`. Override it with `REACT_APP_API_ENDPOINT` when needed.
 
-2. Create a virtual env in 
-`python -m venv venv`
-`source venv/bin/activate` \
-For Windows: use Command Prompt `.\venv\Scripts\Activate`
+### 3. Electron shell
 
-3. Install pyinstaller
-`pip install pyinstaller`
+From the repository root:
 
-4. Build the backend
+```bash
+npm install
+npm start
+```
 
-To include the db: `pyinstaller --onefile app.py --add-data "database.db:."`
+## Local model setup
 
-Note: might have to do `pyinstaller --onefile app.py --hidden-import flask`
+Install Ollama from https://ollama.com/download.
 
-Put the flask app, which is in the folder backend/dist in appdist
+The application currently supports these recommended local chat models:
 
-6. Open frontend folder in terminal
-`cd ..`
-`cd frontend`
+- `qwen3:8b`
+- `llama3.1:8b`
 
-7. Install dependencies and Build react app
-`npm install --force`
-`npm run build`
+You can install them from the in-app settings panel, or manually with commands like:
 
-8. Go back to main folder
-`cd ..`
+```bash
+ollama pull qwen3:8b
+ollama pull llama3.1:8b
+```
 
-9. Install all dependencies and run electron
-`npm install`
-`npm start`
+## Packaging the desktop app
 
-10. To package/bundle, run for mac: `npm run make`, and for Linux: `sudo npx electron-forge make --platform=linux --arch=x64`
+### Build the frontend bundle
 
+```bash
+cd frontend
+npm install
+npm run build
+```
 
-Install private models (should include this under installation instructions under the app later):
-1. Follow installation instructions at https://github.com/ollama/ollama
-2. On your terminal, run `ollama pull qwen2.5:3b` (or another model from `backend/local_models.py`)
+### Package the backend binary
+
+```bash
+cd backend
+source venv/bin/activate
+pip install pyinstaller
+pyinstaller --onefile app.py --add-data "database.db:."
+```
+
+Copy the generated binary from `backend/dist/` into `appdist/`.
+
+### Build Electron artifacts
+
+```bash
+npm run package
+```
+
+To create distributables:
+
+```bash
+npm run make
+```
+
+## Validation
+
+Useful checks before shipping:
+
+```bash
+npm --prefix frontend test -- --watchAll=false
+npm --prefix frontend run build
+python3 -m py_compile backend/app.py backend/tests/test_documents.py backend/tests/test_models.py backend/tests/test_translation.py
+```

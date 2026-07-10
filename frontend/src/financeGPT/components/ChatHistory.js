@@ -69,7 +69,7 @@ function ChatHistory(props) {
           const chatsRes = await fetcher("retrieve-all-chats", {
             method: "POST",
             headers: { Accept: "application/json", "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ chat_type: props.chat_type }),
           });
           const chatsData = await chatsRes.json();
           const updatedChats = chatsData.chat_info || [];

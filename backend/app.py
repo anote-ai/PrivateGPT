@@ -16,7 +16,8 @@ from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_
                                                         find_most_recent_chat_from_db, add_document_to_db, chunk_document, update_chat_name_db, delete_chat_from_db, \
                                                         reset_chat_db, change_chat_mode_db, add_message_to_db, get_relevant_chunks, add_sources_to_db, add_model_key_to_db, \
                                                         check_valid_api, reset_uploaded_docs, add_ticker_to_chat_db, download_10K_url_ticker, download_filing_as_pdf, \
-                                                        get_text_from_single_file, translate_text, TRANSLATION_API_KEY_REQUIRED_MESSAGE
+                                                        get_text_from_single_file, translate_text, TRANSLATION_API_KEY_REQUIRED_MESSAGE, \
+                                                        create_openai_client, close_openai_client
 from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fallback_chat_models, get_local_chat_models, get_ollama_options, resolve_chat_model
 
 
@@ -59,6 +60,32 @@ def json_error(message, status_code=400, **payload):
 
 def is_translation_key_error(message):
     return isinstance(message, str) and message.startswith(f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]")
+
+
+def normalize_openai_error(error, missing_key_message=None):
+    raw_message = str(error or "").strip()
+    lowered_message = raw_message.lower()
+
+    if "incorrect api key" in lowered_message or "invalid_api_key" in lowered_message:
+        return (
+            "The configured OpenAI API key is invalid. Update it in Settings or backend OPENAI_API_KEY and try again.",
+            401,
+        )
+
+    if "api_key client option must be set" in lowered_message:
+        return (
+            missing_key_message
+            or "An OpenAI API key is required before this request can use OpenAI.",
+            400,
+        )
+
+    if "rate limit" in lowered_message:
+        return (
+            "OpenAI rate limits are currently preventing this request. Please wait a moment and try again.",
+            429,
+        )
+
+    return raw_message or "OpenAI request failed.", 500
 
 
 def get_ollama_manifest_path(model_tag):
@@ -576,19 +603,22 @@ def process_message_pdf():
     if model_key:
         # Use custom OpenAI API key
         try:
-            import openai as _openai
-            client = _openai.OpenAI(api_key=model_key)
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-            )
-            answer = response.choices[0].message.content.strip()
+            client = create_openai_client(model_key)
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.3,
+                )
+                answer = response.choices[0].message.content.strip()
+            finally:
+                close_openai_client(client)
         except Exception as e:
-            return json_error(f"OpenAI API error: {str(e)}", status_code=500)
+            error_message, status_code = normalize_openai_error(e)
+            return json_error(error_message, status_code=status_code)
     else:
         local_model = resolve_chat_model(model_type)
         try:
@@ -768,7 +798,13 @@ def translate_text_endpoint():
 
         return jsonify(translation=translation)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_message, status_code = normalize_openai_error(
+            e,
+            missing_key_message=(
+                f"{TRANSLATION_API_KEY_REQUIRED_MESSAGE} You can also configure OPENAI_API_KEY on the backend."
+            ),
+        )
+        return jsonify({"error": error_message}), status_code
 
 
 @app.route('/reset-everything', methods=['POST'])

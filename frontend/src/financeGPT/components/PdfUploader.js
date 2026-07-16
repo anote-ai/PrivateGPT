@@ -16,7 +16,14 @@ function formatFileSize(sizeInBytes) {
   return `${(sizeInBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function PDFUploader({ chat_id, handleForceUpdate }) {
+function PDFUploader({
+  chat_id,
+  handleForceUpdate,
+  createNewChat,
+  chatType = 0,
+  modelType = 0,
+  onUploadNeedsSetup,
+}) {
   const { showError, showSuccess } = useNotifications();
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
@@ -45,6 +52,23 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  };
+
+  const ensureChatId = async () => {
+    if (chat_id !== null && chat_id !== undefined) {
+      return chat_id;
+    }
+
+    if (typeof createNewChat !== "function") {
+      throw new Error("Create or select a chat before uploading documents.");
+    }
+
+    const newChat = await createNewChat(chatType, modelType, true);
+    if (!newChat?.id) {
+      throw new Error("Unable to create a new chat for this upload.");
+    }
+
+    return newChat.id;
   };
 
   const uploadMetadata = async (chatId) => {
@@ -96,15 +120,11 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
       return;
     }
 
-    if (!chat_id) {
-      showError("Create or select a chat before uploading documents.", "Chat required");
-      return;
-    }
-
     setIsUploading(true);
 
     try {
-      const uploadUrl = await uploadMetadata(chat_id);
+      const activeChatId = await ensureChatId();
+      const uploadUrl = await uploadMetadata(activeChatId);
       if (!uploadUrl) {
         throw new Error("Missing upload URL from the server.");
       }
@@ -118,22 +138,30 @@ function PDFUploader({ chat_id, handleForceUpdate }) {
       resetSelection();
     } catch (error) {
       console.error("Error during file upload", error);
-      showError(
-        error.message || "We couldn't upload that PDF. Please try again.",
-        "Upload failed"
-      );
+      const errorMessage = error.message || "We couldn't upload that PDF. Please try again.";
+      showError(errorMessage, "Upload failed");
+
+      if (
+        typeof onUploadNeedsSetup === "function" &&
+        (
+          error?.status === 503 ||
+          /ollama|embedding model|local model/i.test(errorMessage)
+        )
+      ) {
+        onUploadNeedsSetup(errorMessage);
+      }
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handleUploadBtnClick = () => {
-    if (!chat_id) {
-      showError("Create or select a chat before choosing a PDF.", "Chat required");
-      return;
+  const handleUploadBtnClick = async () => {
+    try {
+      await ensureChatId();
+      fileInputRef.current?.click();
+    } catch (error) {
+      showError(error.message || "Create or select a chat before choosing a PDF.", "Chat required");
     }
-
-    fileInputRef.current?.click();
   };
 
   const removeSelectedFile = (indexToRemove) => {

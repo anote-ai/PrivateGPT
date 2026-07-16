@@ -158,11 +158,15 @@ const ChatbotTranslation = (props) => {
 
       scrollToBottom();
     } catch (e) {
-      showError(e.message || "Translation failed. Please check your API key settings.", "Translation failed");
+      const errorMessage = e.message || "Translation failed. Please check your API key settings.";
+      showError(
+        errorMessage,
+        errorMessage.toLowerCase().includes("api key") ? "API key required" : "Translation failed"
+      );
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === tempId
-            ? { ...msg, isTyping: false, message: "Translation failed. Please check your API key settings.", id: undefined }
+            ? { ...msg, isTyping: false, message: errorMessage, id: undefined }
             : msg
         )
       );

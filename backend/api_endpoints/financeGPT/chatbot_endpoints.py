@@ -2,6 +2,7 @@ import sqlite3
 import os
 import re
 from datetime import datetime
+from contextlib import suppress
 import numpy as np
 import ollama
 from sec_api import QueryApi, RenderApi
@@ -9,6 +10,7 @@ import requests
 import PyPDF2
 import sys
 from dotenv import load_dotenv
+import httpx
 
 try:
     import openai
@@ -35,6 +37,10 @@ USER_ID = 1
 TRANSLATION_API_KEY_REQUIRED_MESSAGE = "Translation requires an OpenAI API key. Please add one in Settings."
 DEFAULT_CHAT_NAME_PATTERN = re.compile(r"^Chat\s+(\d+)$", re.IGNORECASE)
 DEFAULT_10K_LOOKBACK_YEARS = int(os.getenv("SEC_10K_LOOKBACK_YEARS", "5"))
+OPENAI_CLIENT_INIT_ERROR_MESSAGE = (
+    "OpenAI support is unavailable because the backend dependencies are incompatible. "
+    "Reinstall the backend environment and try again."
+)
 
 
 def dict_factory(cursor, row):
@@ -92,6 +98,40 @@ def get_next_default_chat_name_for_user(cursor, user_id):
     cursor.execute("SELECT chat_name FROM chats WHERE user_id = ?", (user_id,))
     existing_names = [row["chat_name"] for row in cursor.fetchall()]
     return get_next_default_chat_name(existing_names)
+
+
+def is_placeholder_api_key(api_key):
+    normalized_key = str(api_key or "").strip().lower()
+    if not normalized_key:
+        return True
+
+    placeholder_markers = (
+        "your-openai-api-key",
+        "replace-me",
+        "changeme",
+        "example",
+        "placeholder",
+    )
+    return any(marker in normalized_key for marker in placeholder_markers)
+
+
+def create_openai_client(api_key):
+    try:
+        # Build the HTTP client explicitly so newer httpx releases do not break
+        # older openai SDK versions through deprecated proxy kwargs.
+        http_client = httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True)
+        return openai.OpenAI(api_key=api_key, http_client=http_client)
+    except TypeError as error:
+        if "proxies" in str(error):
+            raise RuntimeError(OPENAI_CLIENT_INIT_ERROR_MESSAGE) from error
+        raise
+
+
+def close_openai_client(client):
+    with suppress(Exception):
+        close_method = getattr(client, "close", None)
+        if callable(close_method):
+            close_method()
 
 ## General for all chatbots
 # Chat_type is an integer where 0=chatbot, 1=Edgar, 2=PDFUploader, etc
@@ -680,12 +720,12 @@ def add_ticker_to_chat_db(chat_id, ticker, isUpdate):
 def translate_text(text, source_language, target_language, model_key=None):
     """Translate text using OpenAI (or a local model if no key provided)."""
     if model_key:
-        client = openai.OpenAI(api_key=model_key)
+        client = create_openai_client(model_key)
     else:
         api_key = os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
+        if is_placeholder_api_key(api_key):
             return f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]\n\nOriginal text: {text}"
-        client = openai.OpenAI(api_key=api_key)
+        client = create_openai_client(api_key)
 
     source_desc = f"from {source_language}" if source_language and source_language != "Auto-detect" else ""
     prompt = (
@@ -694,10 +734,13 @@ def translate_text(text, source_language, target_language, model_key=None):
         f"Text to translate:\n{text}"
     )
 
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=2000,
-    )
-    return response.choices[0].message.content.strip()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2000,
+        )
+        return response.choices[0].message.content.strip()
+    finally:
+        close_openai_client(client)

@@ -81,7 +81,7 @@ class TestAuthorizationHeader:
     def test_request_with_bearer_token_accepted(self, client):
         """The app should accept (not reject) requests with a Bearer token header."""
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_chats_from_db",
+            "app.retrieve_chats_from_db",
             return_value=[],
         ):
             resp = _post(
@@ -95,7 +95,7 @@ class TestAuthorizationHeader:
     def test_request_without_token_still_works(self, client):
         """Single-user desktop mode: no auth token required."""
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_chats_from_db",
+            "app.retrieve_chats_from_db",
             return_value=[],
         ):
             resp = _post(client, "/retrieve-all-chats", payload={})

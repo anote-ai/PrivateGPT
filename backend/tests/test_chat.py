@@ -33,7 +33,7 @@ def _post(client, url, payload=None):
 class TestCreateNewChat:
     def test_creates_chat_returns_id(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_chat_to_db",
+            "app.add_chat_to_db",
             return_value=(42, "Chat 1"),
         ):
             resp = _post(client, "/create-new-chat", {"chat_type": 0, "model_type": 0})
@@ -45,7 +45,7 @@ class TestCreateNewChat:
 
     def test_creates_edgar_chat(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_chat_to_db",
+            "app.add_chat_to_db",
             return_value=(7, "Chat 2"),
         ):
             resp = _post(client, "/create-new-chat", {"chat_type": 1, "model_type": 1})
@@ -76,7 +76,7 @@ class TestRetrieveAllChats:
             {"id": 2, "chat_name": "Chat 2", "model_type": 1, "associated_task": 1, "ticker": "AAPL", "custom_model_key": None},
         ]
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_chats_from_db",
+            "app.retrieve_chats_from_db",
             return_value=mock_chats,
         ):
             resp = _post(client, "/retrieve-all-chats", {})
@@ -87,7 +87,7 @@ class TestRetrieveAllChats:
 
     def test_returns_empty_list_when_no_chats(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_chats_from_db",
+            "app.retrieve_chats_from_db",
             return_value=[],
         ):
             resp = _post(client, "/retrieve-all-chats", {})
@@ -106,7 +106,7 @@ class TestRetrieveMessages:
             {"message_text": "Hi there!", "sent_from_user": 0, "relevant_chunks": "chunk1", "created": "2026-01-01"},
         ]
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_message_from_db",
+            "app.retrieve_message_from_db",
             return_value=mock_messages,
         ):
             resp = _post(client, "/retrieve-messages-from-chat", {"chat_id": 1, "chat_type": 0})
@@ -117,7 +117,7 @@ class TestRetrieveMessages:
 
     def test_returns_empty_messages_for_new_chat(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_message_from_db",
+            "app.retrieve_message_from_db",
             return_value=[],
         ):
             resp = _post(client, "/retrieve-messages-from-chat", {"chat_id": 99, "chat_type": 0})
@@ -131,12 +131,12 @@ class TestRetrieveMessages:
 
 class TestUpdateChatName:
     def test_updates_name_successfully(self, client):
-        with patch("api_endpoints.financeGPT.chatbot_endpoints.update_chat_name_db"):
+        with patch("app.update_chat_name_db"):
             resp = _post(client, "/update-chat-name", {"chat_id": 1, "chat_name": "My Renamed Chat"})
         assert resp.status_code == 200
 
     def test_update_with_empty_name(self, client):
-        with patch("api_endpoints.financeGPT.chatbot_endpoints.update_chat_name_db"):
+        with patch("app.update_chat_name_db"):
             resp = _post(client, "/update-chat-name", {"chat_id": 1, "chat_name": ""})
         assert resp.status_code == 200
 
@@ -148,7 +148,7 @@ class TestUpdateChatName:
 class TestDeleteChat:
     def test_deletes_chat_successfully(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.delete_chat_from_db",
+            "app.delete_chat_from_db",
             return_value="Successfully deleted",
         ):
             resp = _post(client, "/delete-chat", {"chat_id": 1})
@@ -156,7 +156,7 @@ class TestDeleteChat:
 
     def test_delete_nonexistent_chat(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.delete_chat_from_db",
+            "app.delete_chat_from_db",
             return_value="Could not delete",
         ):
             resp = _post(client, "/delete-chat", {"chat_id": 9999})
@@ -171,7 +171,7 @@ class TestFindMostRecentChat:
     def test_returns_most_recent_chat(self, client):
         mock_chat = {"id": 5, "chat_name": "Recent Chat"}
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.find_most_recent_chat_from_db",
+            "app.find_most_recent_chat_from_db",
             return_value=mock_chat,
         ):
             resp = _post(client, "/find-most-recent-chat", {})
@@ -181,7 +181,7 @@ class TestFindMostRecentChat:
 
     def test_returns_none_when_no_chats(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.find_most_recent_chat_from_db",
+            "app.find_most_recent_chat_from_db",
             return_value=None,
         ):
             resp = _post(client, "/find-most-recent-chat", {})
@@ -196,7 +196,7 @@ class TestFindMostRecentChat:
 class TestResetChat:
     def test_resets_chat_messages(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.reset_chat_db",
+            "app.reset_chat_db",
             return_value="Successfully deleted",
         ):
             resp = _post(client, "/reset-chat", {"chat_id": 1})

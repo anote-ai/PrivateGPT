@@ -13,7 +13,21 @@ function useLocalModelInstallation({ modelType, onInstalled }) {
   const [installError, setInstallError] = useState("");
   const installPollTimeoutRef = useRef(null);
 
-  const normalizeInstallError = (value) => (typeof value === "string" ? value : "");
+  const normalizeInstallError = (value) => {
+    if (typeof value === "string") {
+      return value.trim();
+    }
+
+    if (value instanceof Error && typeof value.message === "string") {
+      return value.message.trim();
+    }
+
+    if (value && typeof value === "object" && typeof value.message === "string") {
+      return value.message.trim();
+    }
+
+    return "";
+  };
 
   const clearPendingPoll = () => {
     if (installPollTimeoutRef.current) {

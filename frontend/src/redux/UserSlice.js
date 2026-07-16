@@ -201,17 +201,18 @@ export const initialState = {
         state.refreshToken = action.payload;
       },
     },
-    extraReducers: {
-        [refreshCredits.fulfilled]: (state, action) => {
-            state.numCredits = action.payload["numCredits"];
-        },
-        [viewUser.fulfilled]: (state, action) => {
+    extraReducers: (builder) => {
+      builder
+        .addCase(refreshCredits.fulfilled, (state, action) => {
+          state.numCredits = action.payload["numCredits"];
+        })
+        .addCase(viewUser.fulfilled, (state, action) => {
           clearUser(state);
           var id = action.payload["id"];
           state.currentUser = id;
           state.entities.users.allIds.push(id);
           state.entities.users.byId[id] = action.payload;
-        },
+        });
     },
   });
 

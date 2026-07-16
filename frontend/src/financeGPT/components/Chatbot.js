@@ -350,6 +350,10 @@ const Chatbot = (props) => {
                 <PDFUploader
                   chat_id={props.selectedChatId}
                   handleForceUpdate={props.handleForceUpdate}
+                  createNewChat={props.createNewChat}
+                  chatType={props.chat_type}
+                  modelType={props.isPrivate}
+                  onUploadNeedsSetup={openInstallationModal}
                 />
               </div>
               <textarea

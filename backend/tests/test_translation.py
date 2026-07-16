@@ -17,7 +17,7 @@ Demo use cases:
 """
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import ANY, patch, MagicMock
 from api_endpoints.financeGPT.chatbot_endpoints import TRANSLATION_API_KEY_REQUIRED_MESSAGE
 
 
@@ -176,6 +176,20 @@ class TestTranslateTextUnit:
             )
         assert "API key" in result or "Translation requires" in result
 
+    def test_placeholder_env_key_returns_fallback(self):
+        from api_endpoints.financeGPT.chatbot_endpoints import translate_text
+
+        import os
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "your-openai-api-key-here"}):
+            result = translate_text(
+                "Hello world",
+                source_language="English",
+                target_language="French",
+                model_key=None,
+            )
+
+        assert "Translation requires an OpenAI API key" in result
+
     def test_uses_provided_model_key_over_env(self):
         """When model_key is provided, it should be used directly (not env var)."""
         from api_endpoints.financeGPT.chatbot_endpoints import translate_text
@@ -184,7 +198,19 @@ class TestTranslateTextUnit:
         mock_client.chat.completions.create.return_value = _mock_openai_response("Hola mundo")
         with patch("api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI", return_value=mock_client) as mock_ctor:
             translate_text("Hello world", "English", "Spanish", model_key="sk-custom-key")
-        mock_ctor.assert_called_once_with(api_key="sk-custom-key")
+        mock_ctor.assert_called_once_with(api_key="sk-custom-key", http_client=ANY)
+
+    def test_surfaces_dependency_mismatch_cleanly(self):
+        from api_endpoints.financeGPT.chatbot_endpoints import create_openai_client
+
+        with patch(
+            "api_endpoints.financeGPT.chatbot_endpoints.openai.OpenAI",
+            side_effect=TypeError("Client.__init__() got an unexpected keyword argument 'proxies'"),
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                create_openai_client("sk-test")
+
+        assert "backend dependencies are incompatible" in str(exc_info.value)
 
     def test_temperature_set_for_accuracy(self):
         """Translation calls should use low temperature for determinism."""

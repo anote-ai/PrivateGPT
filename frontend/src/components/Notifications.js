@@ -2,6 +2,22 @@ import React, { createContext, useCallback, useContext, useMemo, useState } from
 
 const NotificationContext = createContext(null);
 
+function toDisplayText(value, fallback) {
+  if (typeof value === "string") {
+    return value.trim() || fallback;
+  }
+
+  if (value instanceof Error && typeof value.message === "string") {
+    return value.message.trim() || fallback;
+  }
+
+  if (value && typeof value === "object" && typeof value.message === "string") {
+    return value.message.trim() || fallback;
+  }
+
+  return fallback;
+}
+
 function getToastStyles(type) {
   switch (type) {
     case "success":
@@ -24,7 +40,15 @@ export function NotificationProvider({ children }) {
 
   const showNotification = useCallback(({ title, message, type = "info", durationMs = 4200 }) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setNotifications((current) => [...current, { id, title, message, type }]);
+    setNotifications((current) => [
+      ...current,
+      {
+        id,
+        title: toDisplayText(title, "Heads up"),
+        message: toDisplayText(message, "Something happened, but we could not show the full details."),
+        type,
+      },
+    ]);
 
     window.setTimeout(() => {
       dismissNotification(id);
@@ -57,7 +81,7 @@ export function NotificationProvider({ children }) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold">{notification.title}</p>
-                <p className="mt-1 text-sm opacity-90">{notification.message}</p>
+                <p className="mt-1 whitespace-pre-line text-sm opacity-90">{notification.message}</p>
               </div>
               <button
                 type="button"

@@ -217,30 +217,18 @@ Auth token is stored in localStorage and sent as `Authorization: Bearer <token>`
 
 ## Security Notes
 
-Several hardcoded secrets exist in the codebase and should be moved to environment variables:
+Secrets (DB credentials, `SEC_API_KEY`, `OPENAI_API_KEY`) are loaded from environment variables via `python-dotenv`. When modifying auth or API logic, do not add new hardcoded credentials — use `.env` instead.
 
-- `backend/constants/global_constants.py` — database host, username, and password
-- `backend/api_endpoints/financeGPT/chatbot_endpoints.py` — `sec_api` key
-
-These are listed in `.gitignore` exclusions conceptually but currently committed. When modifying auth or API logic, do not add new hardcoded credentials — use `.env` via `python-dotenv` instead.
-
-`USER_ID = 1` is hardcoded in several places as a placeholder for local single-user operation. Multi-user support requires replacing this with session-derived user IDs.
+User identity is resolved per-request by `resolve_request_user_id()` in `backend/api_endpoints/financeGPT/chatbot_endpoints.py`: a valid `Authorization: Bearer <session_token>` selects that user; otherwise a local single-user account is auto-provisioned (desktop mode). All chat/document DB functions take an explicit `user_id` parameter and scope queries to it, and chat-scoped routes verify ownership via `user_owns_chat()`. Do not add new endpoints that accept a `chat_id`/`doc_id` without scoping to the resolved user.
 
 ---
 
 ## Testing
 
-Testing coverage is minimal:
+- `backend/tests/` — pytest suite covering auth, chat, document, model, translation, and user-isolation endpoints. Run with `cd backend && pytest tests/`. The conftest points `DB_PATH` at a fresh temp SQLite file per test; note that `app.py` imports DB functions directly, so patch them as `app.<fn>` (not `api_endpoints.financeGPT.chatbot_endpoints.<fn>`).
+- `frontend/src/App.test.js` — single smoke test using React Testing Library. Run with `cd frontend && npm test`.
 
-- `frontend/src/App.test.js` — single smoke test using React Testing Library
-- No Python unit tests exist
-
-To run frontend tests:
-```bash
-cd frontend && npm test
-```
-
-When adding new features, add corresponding tests in `frontend/src/` for components and consider adding `pytest` tests in `backend/` for API endpoints.
+When adding new features, add corresponding tests in `frontend/src/` for components and `pytest` tests in `backend/tests/` for API endpoints.
 
 ---
 

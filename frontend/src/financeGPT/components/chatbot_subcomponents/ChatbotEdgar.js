@@ -10,7 +10,8 @@ import {
   faUser,
 } from "@fortawesome/free-solid-svg-icons";
 import "../../styles/Chatbot.css";
-import fetcher, { downloadResponseAsFile } from "../../../http/RequestConfig";
+import fetcher from "../../../http/RequestConfig";
+import { EXPORT_FORMATS, exportChatHistory } from "../../utils/exportChat";
 import TypingIndicator from "../TypingIndicator";
 import Modal from "../../../components/Modal";
 import ReactMarkdown from "react-markdown";
@@ -30,6 +31,19 @@ const ChatbotEdgar = (props) => {
   const [tickerValidationError, setTickerValidationError] = useState("");
   const [showEditModal, setShowEditModal] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handleClickOutside = (event) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showExportMenu]);
 
   const welcomeMessage = (ticker) =>
     ticker
@@ -70,19 +84,19 @@ const ChatbotEdgar = (props) => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   };
 
-  const handleDownload = async () => {
+  const handleExport = async (format) => {
+    setShowExportMenu(false);
     if (props.selectedChatId === null) return;
     try {
-      const response = await fetcher("download-chat-history", {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: props.selectedChatId, chat_type: props.chat_type }),
+      const successMessage = await exportChatHistory({
+        chatId: props.selectedChatId,
+        chatType: props.chat_type,
+        format,
       });
-      await downloadResponseAsFile(response, `chat-history-${props.selectedChatId}.csv`);
-      showSuccess("Chat history downloaded as a CSV file.", "Download ready");
+      showSuccess(successMessage, "Export ready");
     } catch (e) {
-      console.error("Error downloading chat history:", e);
-      showError(e.message || "Unable to download chat history.", "Download failed");
+      console.error("Error exporting chat history:", e);
+      showError(e.message || "Unable to export chat history.", "Export failed");
     }
   };
 
@@ -439,13 +453,28 @@ const ChatbotEdgar = (props) => {
                   <span className="w-2 h-2 bg-green-400 rounded-full" />
                   <div className="text-white font-semibold text-sm">{props.currChatName}</div>
                 </div>
-                <button
-                  className="text-gray-400 hover:text-[#50B7C3] transition-colors p-1 rounded"
-                  onClick={handleDownload}
-                  title="Download history"
-                >
-                  <FontAwesomeIcon icon={faFileDownload} />
-                </button>
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    className="text-gray-400 hover:text-[#50B7C3] transition-colors p-1 rounded"
+                    onClick={() => setShowExportMenu((open) => !open)}
+                    title="Export chat"
+                  >
+                    <FontAwesomeIcon icon={faFileDownload} />
+                  </button>
+                  {showExportMenu && (
+                    <div className="absolute right-0 mt-2 w-48 bg-[#1E2030] border border-gray-700 rounded-xl shadow-lg z-50 overflow-hidden">
+                      {EXPORT_FORMATS.map(({ format, label }) => (
+                        <button
+                          key={format}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-[#2E5C82] hover:text-white transition-colors"
+                          onClick={() => handleExport(format)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Messages */}

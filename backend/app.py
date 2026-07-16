@@ -4,6 +4,7 @@ from flask_cors import CORS, cross_origin
 import os
 import csv
 import io
+from datetime import datetime
 import ollama
 import subprocess
 import threading
@@ -17,7 +18,9 @@ from api_endpoints.financeGPT.chatbot_endpoints import add_chat_to_db, retrieve_
                                                         reset_chat_db, change_chat_mode_db, add_message_to_db, get_relevant_chunks, add_sources_to_db, add_model_key_to_db, \
                                                         check_valid_api, reset_uploaded_docs, add_ticker_to_chat_db, download_10K_url_ticker, download_filing_as_pdf, \
                                                         get_text_from_single_file, translate_text, TRANSLATION_API_KEY_REQUIRED_MESSAGE, \
-                                                        create_openai_client, close_openai_client
+                                                        create_openai_client, close_openai_client, \
+                                                        resolve_request_user_id, user_owns_chat, get_chat_details
+from chat_export import build_markdown_export, build_html_export, sanitize_filename
 from local_models import DEFAULT_CHAT_MODEL_TYPE, LOCAL_EMBEDDING_MODEL, get_fallback_chat_models, get_local_chat_models, get_ollama_options, resolve_chat_model
 
 
@@ -56,6 +59,12 @@ def json_success(status_code=200, **payload):
 
 def json_error(message, status_code=400, **payload):
     return jsonify({"error": message, **payload}), status_code
+
+
+def require_chat_ownership(chat_id, user_id):
+    if user_owns_chat(chat_id, user_id):
+        return None
+    return json_error("Chat not found.", status_code=404)
 
 
 def is_translation_key_error(message):
@@ -381,25 +390,48 @@ def download_chat_history():
     try:
         chat_type = payload_value('chat_type')
         chat_id = payload_value('chat_id')
+        export_format = (payload_value('format') or 'csv').lower()
 
         if chat_id is None:
             return json_error("chat_id is required.")
 
-        messages = retrieve_message_from_db(chat_id, chat_type)
+        if export_format not in ('csv', 'md', 'html'):
+            return json_error("format must be one of: csv, md, html.")
 
-        paired_messages = []
-        for i in range(len(messages) - 1):
-            if messages[i]['sent_from_user'] == 1 and messages[i+1]['sent_from_user'] == 0:
-                paired_messages.append((messages[i]['message_text'], messages[i+1]['message_text']))
+        user_id = resolve_request_user_id()
+        chat = get_chat_details(chat_id, user_id)
+        if chat is None:
+            return json_error("Chat not found.", status_code=404)
 
-        csv_buffer = io.StringIO()
-        writer = csv.writer(csv_buffer)
-        writer.writerow(['Query', 'Response'])
-        writer.writerows(paired_messages)
+        messages = retrieve_message_from_db(chat_id, chat_type, user_id)
 
-        response = Response(csv_buffer.getvalue(), mimetype='text/csv')
-        response.headers['Content-Disposition'] = f'attachment; filename=chat-history-{chat_id}.csv'
-        return response
+        if export_format == 'csv':
+            paired_messages = []
+            for i in range(len(messages) - 1):
+                if messages[i]['sent_from_user'] == 1 and messages[i+1]['sent_from_user'] == 0:
+                    paired_messages.append((messages[i]['message_text'], messages[i+1]['message_text']))
+
+            csv_buffer = io.StringIO()
+            writer = csv.writer(csv_buffer)
+            writer.writerow(['Query', 'Response'])
+            writer.writerows(paired_messages)
+
+            response = Response(csv_buffer.getvalue(), mimetype='text/csv')
+            response.headers['Content-Disposition'] = f'attachment; filename=chat-history-{chat_id}.csv'
+            return response
+
+        exported_at = datetime.now().strftime('%B %d, %Y at %H:%M')
+        document_names = [doc['document_name'] for doc in retrieve_docs_from_db(chat_id, user_id)]
+        base_name = sanitize_filename(chat['chat_name'], fallback=f'chat-{chat_id}')
+
+        if export_format == 'md':
+            body = build_markdown_export(chat['chat_name'], chat['ticker'], document_names, messages, exported_at)
+            response = Response(body, mimetype='text/markdown; charset=utf-8')
+            response.headers['Content-Disposition'] = f'attachment; filename={base_name}.md'
+            return response
+
+        body = build_html_export(chat['chat_name'], chat['ticker'], document_names, messages, exported_at)
+        return Response(body, mimetype='text/html; charset=utf-8')
     except Exception as error:
         return json_error("Unable to export chat history.", status_code=500, details=str(error))
 
@@ -409,7 +441,7 @@ def create_new_chat():
     chat_type = payload_value('chat_type')
     model_type = payload_value('model_type')
 
-    chat_id, chat_name = add_chat_to_db(chat_type, model_type) #for now hardcode the model type as being 0
+    chat_id, chat_name = add_chat_to_db(chat_type, model_type, resolve_request_user_id())
 
     return jsonify(chat_id=chat_id, chat_name=chat_name)
 
@@ -418,7 +450,7 @@ def create_new_chat():
 @cross_origin(origins='*', supports_credentials=True)
 def retrieve_chats():
 
-    chat_info = retrieve_chats_from_db()
+    chat_info = retrieve_chats_from_db(resolve_request_user_id())
 
     return jsonify(chat_info=chat_info)
 
@@ -432,7 +464,7 @@ def retrieve_messages_from_chat():
     if chat_id is None:
         return json_error("chat_id is required.")
 
-    messages = retrieve_message_from_db(chat_id, chat_type)
+    messages = retrieve_message_from_db(chat_id, chat_type, resolve_request_user_id())
 
     return jsonify(messages=messages)
 
@@ -448,7 +480,7 @@ def update_chat_name():
     if chat_name is None:
         return json_error("chat_name is required.")
 
-    update_chat_name_db(chat_id, chat_name)
+    update_chat_name_db(chat_id, chat_name, resolve_request_user_id())
 
     return json_success(message="Chat name updated")
 
@@ -460,12 +492,12 @@ def delete_chat():
     if chat_id is None:
         return json_error("chat_id is required.")
 
-    return delete_chat_from_db(chat_id)
+    return delete_chat_from_db(chat_id, resolve_request_user_id())
 
 @app.route('/find-most-recent-chat', methods=['POST'])
 @cross_origin(origins='*', supports_credentials=True)
 def find_most_recent_chat():
-    chat_info = find_most_recent_chat_from_db()
+    chat_info = find_most_recent_chat_from_db(resolve_request_user_id())
 
     return jsonify(chat_info=chat_info)
 
@@ -490,6 +522,10 @@ def ingest_files(chat_id, upload_token):
 
     if not files:
         return json_error("At least one PDF file is required.")
+
+    ownership_error = require_chat_ownership(chat_id, resolve_request_user_id())
+    if ownership_error:
+        return ownership_error
 
     embedding_ready_error = ensure_local_embedding_ready("Document upload")
     if embedding_ready_error:
@@ -522,7 +558,7 @@ def retrieve_current_docs():
     if chat_id is None:
         return json_error("chat_id is required.")
 
-    doc_info = retrieve_docs_from_db(chat_id)
+    doc_info = retrieve_docs_from_db(chat_id, resolve_request_user_id())
 
     return jsonify(doc_info=doc_info)
 
@@ -535,7 +571,7 @@ def delete_doc():
     if doc_id is None:
         return json_error("doc_id is required.")
 
-    delete_doc_from_db(doc_id)
+    delete_doc_from_db(doc_id, resolve_request_user_id())
 
     return json_success(message="Document deleted")
 
@@ -549,8 +585,9 @@ def change_chat_mode_and_reset_chat():
         return json_error("chat_id is required.")
 
     try:
-        reset_chat_db(chat_id)
-        change_chat_mode_db(chat_mode_to_change_to, chat_id)
+        user_id = resolve_request_user_id()
+        reset_chat_db(chat_id, user_id)
+        change_chat_mode_db(chat_mode_to_change_to, chat_id, user_id)
 
         return json_success(message="Chat mode updated")
     except Exception as error:
@@ -564,7 +601,7 @@ def reset_chat():
     if chat_id is None:
         return json_error("chat_id is required.")
 
-    return reset_chat_db(chat_id)
+    return reset_chat_db(chat_id, resolve_request_user_id())
 
 
 @app.route('/process-message-pdf', methods=['POST'])
@@ -581,7 +618,10 @@ def process_message_pdf():
     if not message or not str(message).strip():
         return json_error("message is required.")
 
-    ##Include part where we verify if user actually owns the chat_id later
+    user_id = resolve_request_user_id()
+    ownership_error = require_chat_ownership(chat_id, user_id)
+    if ownership_error:
+        return ownership_error
 
     query = message.strip()
 
@@ -589,7 +629,7 @@ def process_message_pdf():
     add_message_to_db(query, chat_id, 1)
 
     #Get most relevant section from the document
-    sources = get_relevant_chunks(2, query, chat_id)
+    sources = get_relevant_chunks(2, query, chat_id, user_id)
     sources_str = " ".join([", ".join(str(elem) for elem in source) for source in sources])
 
     system_prompt = (
@@ -649,7 +689,7 @@ def add_model_key():
     if chat_id is None:
         return json_error("chat_id is required.")
 
-    add_model_key_to_db(model_key, chat_id)
+    add_model_key_to_db(model_key, chat_id, resolve_request_user_id())
 
     return json_success(message="Model key updated")
 
@@ -682,7 +722,7 @@ def add_ticker():
     if not ticker:
         return json_error("ticker is required.")
 
-    return add_ticker_to_chat_db(chat_id, ticker, isUpdate)
+    return add_ticker_to_chat_db(chat_id, ticker, isUpdate, resolve_request_user_id())
 
 
 @app.route('/process-ticker-info', methods=['POST'])
@@ -697,6 +737,11 @@ def process_ticker_info():
     if not ticker:
         return jsonify({"error": "Ticker is required."}), 400
 
+    user_id = resolve_request_user_id()
+    ownership_error = require_chat_ownership(chat_id, user_id)
+    if ownership_error:
+        return ownership_error
+
     embedding_ready_error = ensure_local_embedding_ready("Ticker analysis")
     if embedding_ready_error:
         return embedding_ready_error
@@ -705,7 +750,7 @@ def process_ticker_info():
     filename = None
 
     try:
-        reset_uploaded_docs(chat_id)
+        reset_uploaded_docs(chat_id, user_id)
 
         url, ticker = download_10K_url_ticker(ticker)
         if not url or not ticker:
@@ -765,7 +810,7 @@ def infer_chat_name():
         words = messages.strip().split()
         chat_name = ' '.join(words[:5]) or f'Chat {chat_id}'
 
-    update_chat_name_db(chat_id, chat_name)
+    update_chat_name_db(chat_id, chat_name, resolve_request_user_id())
     return jsonify(chat_name=chat_name)
 
 
@@ -791,7 +836,7 @@ def translate_text_endpoint():
             )
 
         # Persist to DB if we have a chat_id
-        if chat_id:
+        if chat_id and user_owns_chat(chat_id, resolve_request_user_id()):
             user_message = f"[Translate to {target_language}] {text}"
             add_message_to_db(user_message, chat_id, 1)
             add_message_to_db(translation, chat_id, 0)

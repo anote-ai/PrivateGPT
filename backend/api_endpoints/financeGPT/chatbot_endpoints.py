@@ -5,6 +5,7 @@ from datetime import datetime
 from contextlib import suppress
 import numpy as np
 import ollama
+from flask import has_request_context, request
 from sec_api import QueryApi, RenderApi
 import requests
 import PyPDF2
@@ -33,7 +34,6 @@ from local_models import LOCAL_EMBEDDING_MODEL, get_ollama_options, normalize_mo
 sec_api_key = os.getenv("SEC_API_KEY", "")
 
 
-USER_ID = 1
 TRANSLATION_API_KEY_REQUIRED_MESSAGE = "Translation requires an OpenAI API key. Please add one in Settings."
 DEFAULT_CHAT_NAME_PATTERN = re.compile(r"^Chat\s+(\d+)$", re.IGNORECASE)
 DEFAULT_10K_LOOKBACK_YEARS = int(os.getenv("SEC_10K_LOOKBACK_YEARS", "5"))
@@ -74,6 +74,82 @@ def get_db_connection():
     init_db_if_needed(conn, cursor)
 
     return conn, cursor
+
+
+def get_request_session_token():
+    if not has_request_context():
+        return None
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    return auth_header[len("Bearer "):].strip() or None
+
+
+def get_or_create_local_user_id(conn, cursor):
+    """Return the local single-user account, creating it on first use.
+
+    Fresh desktop installs have an empty users table even though chats are
+    written with a user id, so this row must exist for the chat/message
+    queries (which join users) to return anything."""
+    cursor.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+    row = cursor.fetchone()
+    if row:
+        return row["id"]
+
+    cursor.execute("INSERT INTO users (credits) VALUES (0)")
+    conn.commit()
+    return cursor.lastrowid
+
+
+def resolve_request_user_id():
+    """Resolve the acting user for the current request.
+
+    A valid session token (Authorization: Bearer <token>) selects that user;
+    otherwise fall back to the auto-provisioned local single-user account so
+    the desktop app works without a login flow."""
+    conn, cursor = get_db_connection()
+    try:
+        token = get_request_session_token()
+        if token:
+            cursor.execute(
+                "SELECT id, session_token_expiration FROM users WHERE session_token = ?",
+                (token,),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                expiration = row["session_token_expiration"]
+                if not expiration or str(expiration) >= datetime.now().isoformat(sep=" "):
+                    return row["id"]
+
+        return get_or_create_local_user_id(conn, cursor)
+    finally:
+        conn.close()
+
+
+def user_owns_chat(chat_id, user_id):
+    conn, cursor = get_db_connection()
+    try:
+        cursor.execute(
+            "SELECT 1 FROM chats WHERE id = ? AND user_id = ?",
+            (chat_id, user_id),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def get_chat_details(chat_id, user_id):
+    conn, cursor = get_db_connection()
+    try:
+        cursor.execute(
+            "SELECT id, chat_name, ticker, model_type, associated_task FROM chats WHERE id = ? AND user_id = ?",
+            (chat_id, user_id),
+        )
+        return cursor.fetchone()
+    finally:
+        conn.close()
 
 
 def get_next_default_chat_name(existing_names):
@@ -135,14 +211,14 @@ def close_openai_client(client):
 
 ## General for all chatbots
 # Chat_type is an integer where 0=chatbot, 1=Edgar, 2=PDFUploader, etc
-def add_chat_to_db(chat_type, model_type): #intake the current userID and the model type into the chat table
+def add_chat_to_db(chat_type, model_type, user_id): #intake the current userID and the model type into the chat table
     conn, cursor = get_db_connection()
     normalized_model_type = normalize_model_type(model_type)
-    chat_name = get_next_default_chat_name_for_user(cursor, USER_ID)
+    chat_name = get_next_default_chat_name_for_user(cursor, user_id)
 
     cursor.execute(
         'INSERT INTO chats (user_id, model_type, associated_task, chat_name) VALUES (?, ?, ?, ?)',
-        (USER_ID, normalized_model_type, chat_type, chat_name)
+        (user_id, normalized_model_type, chat_type, chat_name)
     )
     chat_id = cursor.lastrowid
 
@@ -151,7 +227,7 @@ def add_chat_to_db(chat_type, model_type): #intake the current userID and the mo
 
     return chat_id, chat_name
 
-def update_chat_name_db(chat_id, new_name):
+def update_chat_name_db(chat_id, new_name, user_id):
     conn, cursor = get_db_connection()
 
     query = """
@@ -159,14 +235,14 @@ def update_chat_name_db(chat_id, new_name):
     SET chat_name = ?
     WHERE id = ? AND user_id = ?;
     """
-    cursor.execute(query, (new_name, chat_id, USER_ID))
+    cursor.execute(query, (new_name, chat_id, user_id))
 
     conn.commit()
     conn.close()
 
     return
 
-def retrieve_chats_from_db():
+def retrieve_chats_from_db(user_id):
     conn, cursor = get_db_connection()
 
     query = """
@@ -177,7 +253,7 @@ def retrieve_chats_from_db():
         """
 
     # Execute the query
-    cursor.execute(query, (USER_ID,))
+    cursor.execute(query, (user_id,))
     chat_info = cursor.fetchall()
 
     conn.close()
@@ -185,7 +261,7 @@ def retrieve_chats_from_db():
     return chat_info
 
 
-def retrieve_message_from_db(chat_id, chat_type):
+def retrieve_message_from_db(chat_id, chat_type, user_id):
     conn, cursor = get_db_connection()
 
     query = """
@@ -198,7 +274,7 @@ def retrieve_message_from_db(chat_id, chat_type):
 
 
     # Execute the query
-    cursor.execute(query, (chat_id, USER_ID, chat_type))
+    cursor.execute(query, (chat_id, user_id, chat_type))
     messages = cursor.fetchall()
 
     conn.commit()
@@ -207,9 +283,15 @@ def retrieve_message_from_db(chat_id, chat_type):
     return messages
 
 
-def delete_chat_from_db(chat_id):
+def delete_chat_from_db(chat_id, user_id):
     print("delete chat from db")
     conn, cursor = get_db_connection()
+
+    cursor.execute("SELECT 1 FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id))
+    if cursor.fetchone() is None:
+        print(f"No chat deleted. Chat ID {chat_id} may not exist or does not belong to user {user_id}.")
+        conn.close()
+        return 'Could not delete'
 
     delete_chunks_query = """
     DELETE FROM chunks
@@ -224,32 +306,32 @@ def delete_chat_from_db(chat_id):
     WHERE chat_id = ?
     """
     cursor.execute(delete_documents_query, (chat_id,))
-    
+
     delete_messages_query = """
     DELETE FROM messages
     WHERE chat_id = ?
     """
     cursor.execute(delete_messages_query, (chat_id,))
-    
+
     delete_chat_query = """
     DELETE FROM chats
     WHERE id = ? AND user_id = ?
     """
-    cursor.execute(delete_chat_query, (chat_id, USER_ID))
+    cursor.execute(delete_chat_query, (chat_id, user_id))
 
     conn.commit()
 
     if cursor.rowcount > 0:
-        print(f"Deleted chat with ID {chat_id} for user {USER_ID}.")
+        print(f"Deleted chat with ID {chat_id} for user {user_id}.")
         conn.close()
         return 'Successfully deleted'
     else:
-        print(f"No chat deleted. Chat ID {chat_id} may not exist or does not belong to user {USER_ID}.")
+        print(f"No chat deleted. Chat ID {chat_id} may not exist or does not belong to user {user_id}.")
         conn.close()
         return 'Could not delete'
 
 
-def reset_chat_db(chat_id):
+def reset_chat_db(chat_id, user_id):
     print("reset chat")
     conn, cursor = get_db_connection()
 
@@ -261,31 +343,35 @@ def reset_chat_db(chat_id):
         AND chats.user_id = ?
     );
     """
-    cursor.execute(delete_messages_query, (chat_id, USER_ID))
+    cursor.execute(delete_messages_query, (chat_id, user_id))
 
     conn.commit()
 
     if cursor.rowcount > 0:
-        print(f"Deleted chat with ID {chat_id} for user {USER_ID}.")
+        print(f"Deleted chat with ID {chat_id} for user {user_id}.")
         conn.close()
         return 'Successfully deleted'
     else:
-        print(f"No chat deleted. Chat ID {chat_id} may not exist or does not belong to user {USER_ID}.")
+        print(f"No chat deleted. Chat ID {chat_id} may not exist or does not belong to user {user_id}.")
         conn.close()
         return 'Could not delete'
     
     
-def reset_uploaded_docs(chat_id):
+def reset_uploaded_docs(chat_id, user_id):
     conn, cursor = get_db_connection()
 
     delete_chunks_query = """
     DELETE FROM chunks
     WHERE document_id IN (
         SELECT id FROM documents
-        WHERE chat_id = ?
+        WHERE chat_id = ? AND EXISTS (
+            SELECT 1 FROM chats
+            WHERE chats.id = documents.chat_id
+            AND chats.user_id = ?
+        )
     )
     """
-    cursor.execute(delete_chunks_query, (chat_id,))
+    cursor.execute(delete_chunks_query, (chat_id, user_id))
 
     delete_documents_query = """
     DELETE FROM documents
@@ -295,14 +381,14 @@ def reset_uploaded_docs(chat_id):
         AND chats.user_id = ?
     )
     """
-    cursor.execute(delete_documents_query, (chat_id, USER_ID))
+    cursor.execute(delete_documents_query, (chat_id, user_id))
 
     conn.commit()
 
     conn.close()
 
 
-def find_most_recent_chat_from_db():
+def find_most_recent_chat_from_db(user_id):
     conn, cursor = get_db_connection()
 
     query = """
@@ -315,7 +401,7 @@ def find_most_recent_chat_from_db():
     """
 
     # Execute the query
-    cursor.execute(query, (USER_ID,))
+    cursor.execute(query, (user_id,))
     chat_info = cursor.fetchone()
 
     conn.commit()
@@ -323,7 +409,7 @@ def find_most_recent_chat_from_db():
 
     return chat_info
 
-def change_chat_mode_db(chat_mode_to_change_to, chat_id):
+def change_chat_mode_db(chat_mode_to_change_to, chat_id, user_id):
     conn, cursor = get_db_connection()
     normalized_model_type = normalize_model_type(chat_mode_to_change_to)
 
@@ -334,7 +420,7 @@ def change_chat_mode_db(chat_mode_to_change_to, chat_id):
     """
 
     # Execute the query
-    cursor.execute(query, (normalized_model_type, chat_id, USER_ID))
+    cursor.execute(query, (normalized_model_type, chat_id, user_id))
 
     conn.commit()
     conn.close()
@@ -464,7 +550,7 @@ def knn(x, y):
 
     return results
 
-def get_relevant_chunks(k, question, chat_id):
+def get_relevant_chunks(k, question, chat_id, user_id):
     conn, cursor = get_db_connection()
 
     query = """
@@ -476,7 +562,7 @@ def get_relevant_chunks(k, question, chat_id):
     WHERE u.id = ? AND ch.id = ?
     """
 
-    cursor.execute(query, (USER_ID, chat_id))
+    cursor.execute(query, (user_id, chat_id))
     rows = cursor.fetchall()
 
     embeddings = []
@@ -550,7 +636,7 @@ def add_message_to_db(text, chat_id, isUser):
     return message_id
 
 
-def retrieve_docs_from_db(chat_id):
+def retrieve_docs_from_db(chat_id, user_id):
     conn, cursor = get_db_connection()
 
     query = """
@@ -562,7 +648,7 @@ def retrieve_docs_from_db(chat_id):
         """
 
     # Execute the query
-    cursor.execute(query, (chat_id, USER_ID))
+    cursor.execute(query, (chat_id, user_id))
     docs = cursor.fetchall()
 
     conn.commit()
@@ -571,7 +657,7 @@ def retrieve_docs_from_db(chat_id):
     return docs
 
 
-def delete_doc_from_db(doc_id):
+def delete_doc_from_db(doc_id, user_id):
     #Deletes the document and the associated chunks in the db
     conn, cursor = get_db_connection()
 
@@ -582,7 +668,7 @@ def delete_doc_from_db(doc_id):
             JOIN users u ON c.user_id = u.id
             WHERE u.id = ? AND d.id = ?
         """
-    cursor.execute(verification_query, (USER_ID, doc_id))
+    cursor.execute(verification_query, (user_id, doc_id))
     verification_result = cursor.fetchone()
 
     if verification_result:
@@ -599,7 +685,7 @@ def delete_doc_from_db(doc_id):
 
     return "success"
 
-def add_model_key_to_db(model_key, chat_id, user_email=None):
+def add_model_key_to_db(model_key, chat_id, user_id):
     conn, cursor = get_db_connection()
 
     update_query = """
@@ -608,7 +694,7 @@ def add_model_key_to_db(model_key, chat_id, user_email=None):
         WHERE id = ? AND user_id = ?;
         """
 
-    cursor.execute(update_query, (model_key, chat_id, USER_ID))
+    cursor.execute(update_query, (model_key, chat_id, user_id))
 
     conn.commit()
     conn.close()
@@ -694,20 +780,20 @@ def get_text_from_single_file(file):
 
     return text
 
-def add_ticker_to_chat_db(chat_id, ticker, isUpdate):
+def add_ticker_to_chat_db(chat_id, ticker, isUpdate, user_id):
     conn, cursor = get_db_connection()
 
     if isUpdate:
-        try: 
-            reset_chat_db(chat_id)
+        try:
+            reset_chat_db(chat_id, user_id)
         except:
             return "Error"
-    
+
     query = """UPDATE chats
                SET ticker = ?
                WHERE id = ? AND user_id = ?"""
 
-    cursor.execute(query, (ticker, chat_id, USER_ID))
+    cursor.execute(query, (ticker, chat_id, user_id))
 
     conn.commit()
 

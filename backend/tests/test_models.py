@@ -80,7 +80,9 @@ class TestLocalModels:
 
 class TestInstallLlama:
     def test_install_initiates_successfully(self, client):
-        with patch("app.threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread, patch(
+            "app.resolve_ollama_binary", return_value="/usr/local/bin/ollama"
+        ), patch("app.is_model_installed", return_value=False):
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-llama")
         assert resp.status_code == 200
@@ -88,7 +90,9 @@ class TestInstallLlama:
         assert data.get("success") is True
 
     def test_install_returns_json(self, client):
-        with patch("app.threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread, patch(
+            "app.resolve_ollama_binary", return_value="/usr/local/bin/ollama"
+        ), patch("app.is_model_installed", return_value=False):
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-llama")
         assert resp.content_type == "application/json"
@@ -100,7 +104,9 @@ class TestInstallLlama:
 
 class TestInstallMistral:
     def test_install_initiates_successfully(self, client):
-        with patch("app.threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread, patch(
+            "app.resolve_ollama_binary", return_value="/usr/local/bin/ollama"
+        ), patch("app.is_model_installed", return_value=False):
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-mistral")
         assert resp.status_code == 200
@@ -109,7 +115,9 @@ class TestInstallMistral:
 
 class TestInstallLocalModel:
     def test_install_selected_model(self, client):
-        with patch("app.threading.Thread") as mock_thread:
+        with patch("app.threading.Thread") as mock_thread, patch(
+            "app.resolve_ollama_binary", return_value="/usr/local/bin/ollama"
+        ), patch("app.is_model_installed", return_value=False):
             mock_thread.return_value.start = MagicMock()
             resp = _post(client, "/install-local-model", {"model_type": 1})
 
@@ -189,20 +197,20 @@ class TestLocalModelStatus:
 class TestChangeChatMode:
     def test_change_to_mistral(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.reset_chat_db",
+            "app.reset_chat_db",
             return_value="Successfully deleted",
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.change_chat_mode_db"
+            "app.change_chat_mode_db"
         ):
             resp = _post(client, "/change-chat-mode", {"model_type": 1, "chat_id": 1})
         assert resp.status_code == 200
 
     def test_change_to_llama(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.reset_chat_db",
+            "app.reset_chat_db",
             return_value="Successfully deleted",
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.change_chat_mode_db"
+            "app.change_chat_mode_db"
         ):
             resp = _post(client, "/change-chat-mode", {"model_type": 0, "chat_id": 1})
         assert resp.status_code == 200
@@ -214,11 +222,11 @@ class TestChangeChatMode:
 
 class TestAddModelKey:
     def test_add_key_success(self, client):
-        with patch("api_endpoints.financeGPT.chatbot_endpoints.add_model_key_to_db"):
+        with patch("app.add_model_key_to_db"):
             resp = _post(client, "/add-model-key", {"model_key": "sk-test123", "chat_id": 1})
         assert resp.status_code == 200
 
     def test_add_null_key_to_reset(self, client):
-        with patch("api_endpoints.financeGPT.chatbot_endpoints.add_model_key_to_db"):
+        with patch("app.add_model_key_to_db"):
             resp = _post(client, "/add-model-key", {"model_key": None, "chat_id": 1})
         assert resp.status_code == 200

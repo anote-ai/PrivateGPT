@@ -208,7 +208,7 @@ class TestTranslateEndpoint:
 
     def test_english_to_spanish_endpoint(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.translate_text",
+            "app.translate_text",
             return_value="Los mercados financieros son volátiles.",
         ):
             resp = _post(client, "/translate-text", {
@@ -232,7 +232,7 @@ class TestTranslateEndpoint:
 
     def test_missing_api_key_returns_400(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.translate_text",
+            "app.translate_text",
             return_value=f"[{TRANSLATION_API_KEY_REQUIRED_MESSAGE}]\n\nOriginal text: Hello",
         ), patch(
             "app.add_message_to_db"
@@ -250,7 +250,7 @@ class TestTranslateEndpoint:
 
     def test_english_to_chinese_endpoint(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.translate_text",
+            "app.translate_text",
             return_value="年度净利润增长了15%。",
         ):
             resp = _post(client, "/translate-text", {
@@ -264,7 +264,7 @@ class TestTranslateEndpoint:
 
     def test_translation_error_returns_500(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.translate_text",
+            "app.translate_text",
             side_effect=Exception("OpenAI API error"),
         ):
             resp = _post(client, "/translate-text", {
@@ -287,7 +287,7 @@ class TestTranslateEndpoint:
         """Endpoint should handle large text payloads without error."""
         large_text = "This is a sentence about financial performance. " * 100
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.translate_text",
+            "app.translate_text",
             return_value="C'est une phrase sur la performance financière. " * 100,
         ):
             resp = _post(client, "/translate-text", {

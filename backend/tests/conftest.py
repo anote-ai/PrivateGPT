@@ -21,10 +21,20 @@ sys.modules.setdefault("openai", SimpleNamespace(OpenAI=MagicMock()))
 sys.modules.setdefault("PyPDF2", SimpleNamespace(PdfReader=MagicMock()))
 sys.modules.setdefault("dotenv", SimpleNamespace(load_dotenv=MagicMock()))
 
-# Use a temporary in-memory database for all tests
+# Placeholder until the per-test fixture below assigns a real temp file.
+# ':memory:' cannot be shared here because the app opens a new connection per
+# request, which would give every request its own empty database.
 os.environ['DB_PATH'] = ':memory:'
 os.environ['SEC_API_KEY'] = 'test-sec-key'
 os.environ['OPENAI_API_KEY'] = 'test-openai-key'
+
+
+@pytest.fixture(autouse=True)
+def fresh_db(tmp_path):
+    """Point the app at a fresh on-disk SQLite DB for each test so state
+    persists across requests within a test but never leaks between tests."""
+    os.environ['DB_PATH'] = str(tmp_path / 'test.db')
+    yield
 
 
 @pytest.fixture(scope='session')

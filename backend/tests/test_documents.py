@@ -21,25 +21,35 @@ def _post(client, url, payload=None):
     )
 
 
+def _create_chat(client, chat_type=2):
+    """Create a chat owned by the requesting (local) user and return its id.
+
+    Chat-scoped routes now verify ownership, so tests must operate on a chat
+    that actually exists in the test database."""
+    resp = _post(client, "/create-new-chat", {"chat_type": chat_type, "model_type": 0})
+    return resp.get_json()["chat_id"]
+
+
 # ---------------------------------------------------------------------------
 # /download-chat-history
 # ---------------------------------------------------------------------------
 
 class TestDownloadChatHistory:
     def test_returns_csv_attachment(self, client):
+        chat_id = _create_chat(client)
         messages = [
             {"sent_from_user": 1, "message_text": "What changed this quarter?"},
             {"sent_from_user": 0, "message_text": "Revenue increased 12% year over year."},
         ]
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_message_from_db",
+            "app.retrieve_message_from_db",
             return_value=messages,
         ):
-            resp = _post(client, "/download-chat-history", {"chat_id": 9, "chat_type": 0})
+            resp = _post(client, "/download-chat-history", {"chat_id": chat_id, "chat_type": 0})
 
         assert resp.status_code == 200
         assert resp.mimetype == "text/csv"
-        assert "attachment; filename=chat-history-9.csv" in resp.headers["Content-Disposition"]
+        assert f"attachment; filename=chat-history-{chat_id}.csv" in resp.headers["Content-Disposition"]
         decoded_body = resp.data.decode("utf-8")
         assert "Query,Response" in decoded_body
         assert "What changed this quarter?" in decoded_body
@@ -82,7 +92,7 @@ class TestRetrieveCurrentDocs:
             {"document_name": "10k.pdf", "id": 2},
         ]
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_docs_from_db",
+            "app.retrieve_docs_from_db",
             return_value=mock_docs,
         ):
             resp = _post(client, "/retrieve-current-docs", {"chat_id": 1})
@@ -93,7 +103,7 @@ class TestRetrieveCurrentDocs:
 
     def test_returns_empty_when_no_docs(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.retrieve_docs_from_db",
+            "app.retrieve_docs_from_db",
             return_value=[],
         ):
             resp = _post(client, "/retrieve-current-docs", {"chat_id": 99})
@@ -108,7 +118,7 @@ class TestRetrieveCurrentDocs:
 class TestDeleteDoc:
     def test_deletes_doc_successfully(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.delete_doc_from_db",
+            "app.delete_doc_from_db",
             return_value="success",
         ):
             resp = _post(client, "/delete-doc", {"doc_id": 1})
@@ -116,7 +126,7 @@ class TestDeleteDoc:
 
     def test_delete_nonexistent_doc(self, client):
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.delete_doc_from_db",
+            "app.delete_doc_from_db",
             return_value="success",
         ):
             resp = _post(client, "/delete-doc", {"doc_id": 9999})
@@ -138,6 +148,7 @@ class TestIngestFiles:
         )
 
     def test_ingest_single_file_success(self, client):
+        chat_id = _create_chat(client)
         fake_text = "Annual revenue was $5 billion."
         with patch(
             "app.is_model_installed",
@@ -145,48 +156,51 @@ class TestIngestFiles:
         ), patch(
             "app.get_text_from_single_file", return_value=fake_text
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_document_to_db",
+            "app.add_document_to_db",
             return_value=(1, False),
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.chunk_document"
+            "app.chunk_document"
         ):
             resp = self._make_pdf_upload(
-                client, 1, "test-token", "report.pdf", b"%PDF-1.4 fake content"
+                client, chat_id, "test-token", "report.pdf", b"%PDF-1.4 fake content"
             )
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "success"
 
     def test_ingest_skips_existing_document(self, client):
         """If the document already exists (doesExist=True) chunking is skipped."""
+        chat_id = _create_chat(client)
         with patch(
             "app.is_model_installed",
             return_value=True,
         ), patch(
             "app.get_text_from_single_file", return_value="Some text"
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_document_to_db",
+            "app.add_document_to_db",
             return_value=(1, True),   # doesExist = True
         ) as mock_add, patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.chunk_document"
+            "app.chunk_document"
         ) as mock_chunk:
             resp = self._make_pdf_upload(
-                client, 1, "test-token", "existing.pdf", b"%PDF fake"
+                client, chat_id, "test-token", "existing.pdf", b"%PDF fake"
             )
         assert resp.status_code == 200
         mock_chunk.assert_not_called()
 
     def test_rejects_non_pdf_uploads(self, client):
+        chat_id = _create_chat(client)
         with patch("app.is_model_installed", return_value=True):
             resp = self._make_pdf_upload(
-                client, 1, "test-token", "notes.txt", b"plain text content"
+                client, chat_id, "test-token", "notes.txt", b"plain text content"
             )
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "Only PDF uploads are supported right now."
 
     def test_returns_helpful_error_when_embedding_model_missing(self, client):
+        chat_id = _create_chat(client)
         with patch("app.is_model_installed", return_value=False):
             resp = self._make_pdf_upload(
-                client, 1, "test-token", "report.pdf", b"%PDF-1.4 fake content"
+                client, chat_id, "test-token", "report.pdf", b"%PDF-1.4 fake content"
             )
 
         assert resp.status_code == 503
@@ -207,46 +221,49 @@ class TestProcessMessagePdf:
         }
 
     def test_primary_local_model_response(self, client):
+        chat_id = _create_chat(client)
         mock_ollama_resp = {"message": {"content": "Revenue was $5B."}}
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.get_relevant_chunks",
+            "app.get_relevant_chunks",
             return_value=[("Revenue data: $5B", "report.pdf")],
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_message_to_db",
+            "app.add_message_to_db",
             return_value=1,
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_sources_to_db"
+            "app.add_sources_to_db"
         ), patch("ollama.chat", return_value=mock_ollama_resp) as mock_chat:
-            resp = _post(client, "/process-message-pdf", self._payload(model_type=0))
+            resp = _post(client, "/process-message-pdf", self._payload(model_type=0, chat_id=chat_id))
         assert resp.status_code == 200
         assert resp.get_json()["answer"] == "Revenue was $5B."
         assert mock_chat.call_args.kwargs["model"] == "qwen3:8b"
 
     def test_secondary_local_model_response(self, client):
+        chat_id = _create_chat(client)
         mock_ollama_resp = {"message": {"content": "Net income was $1.2B."}}
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.get_relevant_chunks",
+            "app.get_relevant_chunks",
             return_value=[("Net income: $1.2B", "report.pdf")],
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_message_to_db",
+            "app.add_message_to_db",
             return_value=2,
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_sources_to_db"
+            "app.add_sources_to_db"
         ), patch("ollama.chat", return_value=mock_ollama_resp) as mock_chat:
-            resp = _post(client, "/process-message-pdf", self._payload(model_type=1))
+            resp = _post(client, "/process-message-pdf", self._payload(model_type=1, chat_id=chat_id))
         assert resp.status_code == 200
         assert "1.2B" in resp.get_json()["answer"]
         assert mock_chat.call_args.kwargs["model"] == "llama3.1:8b"
 
     def test_local_model_failure_returns_500(self, client):
+        chat_id = _create_chat(client)
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.get_relevant_chunks",
+            "app.get_relevant_chunks",
             return_value=[],
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_message_to_db",
+            "app.add_message_to_db",
             return_value=1,
         ), patch("ollama.chat", side_effect=Exception("model not found")):
-            resp = _post(client, "/process-message-pdf", self._payload(model_type=0))
+            resp = _post(client, "/process-message-pdf", self._payload(model_type=0, chat_id=chat_id))
         assert resp.status_code == 500
         assert "Qwen 3 8B" in resp.get_json()["error"]
 
@@ -262,29 +279,33 @@ class TestProcessTickerInfo:
         assert resp.get_json()["error"] == "Ticker is required."
 
     def test_returns_success_when_processing_completes(self, client):
+        chat_id = _create_chat(client, chat_type=1)
         with patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.reset_uploaded_docs"
+            "app.is_model_installed",
+            return_value=True,
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.download_10K_url_ticker",
+            "app.reset_uploaded_docs"
+        ), patch(
+            "app.download_10K_url_ticker",
             return_value=("https://example.com/10k.pdf", "AAPL"),
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.download_filing_as_pdf",
+            "app.download_filing_as_pdf",
             return_value="/tmp/aapl-10k.pdf",
         ), patch(
             "app.get_text_from_single_file",
             return_value="10-K filing text",
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.add_document_to_db",
+            "app.add_document_to_db",
             return_value=(1, False),
         ), patch(
-            "api_endpoints.financeGPT.chatbot_endpoints.chunk_document"
+            "app.chunk_document"
         ), patch(
             "app.os.path.exists",
             return_value=True,
         ), patch(
             "app.os.remove"
         ):
-            resp = _post(client, "/process-ticker-info", {"chat_id": 1, "ticker": "AAPL"})
+            resp = _post(client, "/process-ticker-info", {"chat_id": chat_id, "ticker": "AAPL"})
 
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "success"
